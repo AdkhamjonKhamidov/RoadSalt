@@ -87,6 +87,22 @@ The map opens at approximately zoom 14 around that point, showing a few kilomete
 
 For a basic deployment, use any standard Next.js hosting environment that supports Node.js. Keep the deployment simple and maintain the same public-facing limitations: this is a demo and not an operational decision system.
 
+## GitHub
+
+The GitHub remote is configured as `origin`:
+
+```text
+https://github.com/AdkhamjonKhamidov/RoadSalt.git
+```
+
+The RoadSalt map implementation is committed locally on `main`. After reviewing the changes, push it to GitHub with:
+
+```bash
+git push -u origin main
+```
+
+GitHub authentication must be available in your terminal before pushing.
+
 ## Notes for future work
 
 - Keep API calls server-side where practical.
