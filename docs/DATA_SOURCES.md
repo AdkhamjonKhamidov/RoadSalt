@@ -1,6 +1,6 @@
 # Data sources
 
-RoadSalt is designed around public, real-world data sources without requiring a custom backend. In this map stage, CARTO basemap tiles and the cached OpenStreetMap Nominatim lookup are active. Overpass and Open-Meteo integrations are planned, not yet connected.
+RoadSalt uses public, real-world data sources without requiring a custom backend. CARTO basemap tiles, OpenStreetMap Overpass, a cached Nominatim lookup, and Open-Meteo are active. Open-Meteo Elevation is planned, not yet connected.
 
 ## 1. OpenStreetMap Overpass API
 
@@ -8,23 +8,27 @@ RoadSalt is designed around public, real-world data sources without requiring a 
 Used to identify nearby roads, paths, water bodies, wetlands, farmland, and protected or nature areas near the demo location.
 
 ### Implementation status
-Planned for a later stage; the current basemap is not selectable RoadSalt road data.
+Active through the server route `/api/map-data`. The query is limited to the configured 3 km circle around the demo coordinates.
 
 ### Data retrieved
-- road geometry and names when available
-- road class or classification when available
+- primary, secondary, tertiary, residential, unclassified, and service road geometry
+- road names and highway classifications when mapped
 - waterways and bodies of water
 - wetlands
 - farmland and agricultural land
 - protected or nature areas when mapped
 
 ### Update behavior
-- When implemented, query only as needed and cache results where practical to reduce repeated lookups.
+- One bounded request is made when the page loads. Successful data is cached in process memory for 15 minutes and simultaneous requests share the same upstream request.
+- A secondary public Overpass endpoint is tried if the primary endpoint returns a server error or rate limit.
+- Requests time out after 15 seconds; a timeout is surfaced immediately instead of waiting for another endpoint timeout.
 
 ### Limitations
 - Map completeness varies by region.
 - Some environmental features may not be mapped or may be labeled inconsistently.
 - The feature set is not guaranteed to be complete for every road segment.
+- Relation boundaries are reconstructed from returned outer member geometry; malformed or incomplete geometry is omitted rather than fabricated.
+- Network access to public Overpass instances may be rate-limited or unavailable; errors are surfaced with a retry option.
 
 ### Fallback behavior
 - If no mapped feature is found, the interface should show `No mapped sensitive feature found nearby` instead of implying the area is safe.
@@ -73,7 +77,7 @@ Provides the live, light vector basemap used for roads, place labels, and geogra
 Used to retrieve current conditions and the next 24 hours of relevant weather values.
 
 ### Implementation status
-Planned for a later stage; no weather values are currently displayed as live data.
+Active through the server route `/api/weather`.
 
 ### Data retrieved
 - air temperature
@@ -82,14 +86,17 @@ Planned for a later stage; no weather values are currently displayed as live dat
 - snowfall
 - weather code
 - hourly temperature and precipitation expectations
+- the hourly response is limited to the next 24 hours for the UI
 
 ### Update behavior
-- Live data should be refreshed periodically.
-- Cached values are acceptable if clearly labeled as stale or recent.
+- Current and hourly values are requested for the configured demo coordinates and Eastern Time.
+- Successful responses are cached for 10 minutes. Provider/network errors are shown rather than replaced with sample values.
 
 ### Limitations
 - It captures atmospheric weather, not pavement temperature.
 - Data should be used to describe a potential icing indicator, not to say a road definitely has ice.
+- Rain/snow and probability values are forecast model estimates, not road observations.
+- RoadSalt's low/moderate/elevated categories are simple demo rules, not calibrated operational guidance.
 
 ## 5. Open-Meteo Elevation API
 
@@ -97,7 +104,7 @@ Planned for a later stage; no weather values are currently displayed as live dat
 Used to estimate terrain change around selected road coordinates.
 
 ### Implementation status
-Planned for a later stage.
+Planned for a later stage; no elevation request is currently made.
 
 ### Data retrieved
 - elevation samples for road areas

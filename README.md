@@ -10,10 +10,10 @@ RoadSalt is not a treatment recommendation engine. It is a decision-support tool
 
 ## How the demo works
 
-- The interactive map centers on a fixed Salisbury address and uses CARTO's light basemap with OpenStreetMap roads and place labels.
-- The map marks the demo location and supports zooming, panning, and resetting the view.
-- The interface is designed to add weather, terrain, and mapped environmental context in later stages.
-- Future road details will explain available indicators and their limitations rather than make automatic treatment decisions.
+- The interactive map centers on a fixed Salisbury address, with live nearby roads and mapped environmental features from OpenStreetMap.
+- Selecting an OSM road shows its mapped name and class, approximate proximity to mapped sensitive features, and a weather-attention indicator based on Open-Meteo forecast data.
+- The map marks the demo location and supports zooming, panning, and toggling environmental layers.
+- Indicators are explanatory only. Atmospheric forecasts cannot confirm pavement ice, and missing map features do not mean an area is environmentally safe.
 
 ## Screenshot placeholder
 
@@ -21,9 +21,10 @@ _A screenshot of the live map will be added here._
 
 ## Data sources and attribution
 
-- The current map uses CARTO Positron tiles with OpenStreetMap data and visible attribution.
+- The map uses CARTO Positron tiles and OpenStreetMap / Overpass data for nearby roads and environmental features.
 - The Salisbury address was geocoded once with OpenStreetMap Nominatim and its coordinates are cached for the demo.
-- Planned data integrations include OpenStreetMap Overpass for local road and environmental features, Open-Meteo for weather, and Open-Meteo Elevation for terrain estimates.
+- Open-Meteo supplies current conditions and the next 24 hours of forecast data.
+- Open-Meteo Elevation terrain estimates are planned for a later stage.
 
 Follow each provider's published terms, attribution requirements, and rate limits when using its data.
 
@@ -32,7 +33,8 @@ Follow each provider's published terms, attribution requirements, and rate limit
 - The elevation model is not street-level engineering data and should be presented as an estimate only.
 - Weather data describes atmospheric conditions, not pavement temperature.
 - Nearby environmental features are only as complete as the mapped data available in the source APIs.
-- The current map stage provides basemap roads but does not yet include selectable road data or RoadSalt-specific overlays.
+- OpenStreetMap feature coverage is incomplete and is not a comprehensive inventory of waterways, farms, wetlands, or habitats.
+- Terrain analysis has not yet been connected.
 - The demo is intentionally simple and should not be treated as an operational road-treatment system.
 
 ## Project posture

@@ -9,6 +9,12 @@ import type {
   MapMouseEvent,
   Marker,
 } from "maplibre-gl";
+import type {
+  EnvironmentalKind,
+  EnvironmentalProperties,
+  RoadProperties,
+} from "../lib/data-types";
+import { ENVIRONMENTAL_KIND_LABELS, ENVIRONMENTAL_KINDS } from "../lib/data-types";
 import {
   BASEMAP_STYLE_URL,
   DEMO_CENTER,
@@ -16,19 +22,8 @@ import {
   INITIAL_ZOOM,
 } from "./map-config";
 
-export type RoadRiskCategory = "attention" | "elevated" | "both";
-
-export type RoadFeatureProperties = {
-  roadId: string;
-  name?: string;
-  riskCategory?: RoadRiskCategory;
-  [key: string]: string | number | boolean | null | undefined;
-};
-
-export type EnvironmentalFeatureProperties = {
-  kind?: string;
-  [key: string]: string | number | boolean | null | undefined;
-};
+export type RoadFeatureProperties = RoadProperties;
+export type EnvironmentalFeatureProperties = EnvironmentalProperties;
 
 export type MapCanvasProps = {
   roads?: FeatureCollection<Geometry, RoadFeatureProperties>;
@@ -37,6 +32,8 @@ export type MapCanvasProps = {
     EnvironmentalFeatureProperties
   >;
   selectedRoadId?: string | null;
+  visibleEnvironmentalKinds?: EnvironmentalKind[];
+  onEnvironmentalVisibilityChange?: (kind: EnvironmentalKind) => void;
   onRoadSelect?: (road: Feature<Geometry, RoadFeatureProperties>) => void;
 };
 
@@ -54,51 +51,17 @@ function updateOverlays(
   props: MapCanvasProps,
 ) {
   if (!map.isStyleLoaded()) return;
+  const firstLabelLayer = map
+    .getStyle()
+    .layers?.find((layer) => layer.type === "symbol")?.id;
+  const addLayer = (
+    layer: Parameters<MapLibreMap["addLayer"]>[0],
+  ) => map.addLayer(layer, firstLabelLayer);
 
   if (!map.getSource("roadsalt-roads")) {
     map.addSource("roadsalt-roads", {
       type: "geojson",
       data: props.roads ?? EMPTY_ROADS,
-    });
-    map.addLayer({
-      id: "roadsalt-road-network",
-      type: "line",
-      source: "roadsalt-roads",
-      paint: {
-        "line-color": "#65778A",
-        "line-width": 2,
-        "line-opacity": 0.8,
-      },
-    });
-    map.addLayer({
-      id: "roadsalt-risk-roads",
-      type: "line",
-      source: "roadsalt-roads",
-      filter: ["has", "riskCategory"],
-      paint: {
-        "line-color": [
-          "match",
-          ["get", "riskCategory"],
-          "attention",
-          "#C58A1D",
-          "elevated",
-          "#B94A48",
-          "both",
-          "#B94A48",
-          "#C58A1D",
-        ],
-        "line-width": 3,
-      },
-    });
-    map.addLayer({
-      id: "roadsalt-selected-road",
-      type: "line",
-      source: "roadsalt-roads",
-      filter: ["==", ["get", "roadId"], ""],
-      paint: {
-        "line-color": "#3F72AF",
-        "line-width": 4,
-      },
     });
   }
 
@@ -107,25 +70,107 @@ function updateOverlays(
       type: "geojson",
       data: props.environmentalFeatures ?? EMPTY_ENVIRONMENT,
     });
-    map.addLayer({
-      id: "roadsalt-environment-polygons",
-      type: "fill",
-      source: "roadsalt-environment",
-      filter: ["==", ["geometry-type"], "Polygon"],
+  }
+
+  const environmentStyles: Record<
+    EnvironmentalKind,
+    { fill: string; line: string; fillOpacity: number }
+  > = {
+    waterway: { fill: "#91BED1", line: "#6E9FB7", fillOpacity: 0.25 },
+    water: { fill: "#B7D6E4", line: "#6E9FB7", fillOpacity: 0.5 },
+    wetland: { fill: "#D2E5EE", line: "#8CB5C6", fillOpacity: 0.62 },
+    farmland: { fill: "#D7E2D2", line: "#8CA287", fillOpacity: 0.46 },
+    protected: { fill: "#CEDDCB", line: "#789177", fillOpacity: 0.22 },
+  };
+
+  for (const [kind, style] of Object.entries(environmentStyles) as [
+    EnvironmentalKind,
+    (typeof environmentStyles)[EnvironmentalKind],
+  ][]) {
+    const layerBase = `roadsalt-${kind}`;
+    if (!map.getLayer(`${layerBase}-fill`)) {
+      addLayer({
+        id: `${layerBase}-fill`,
+        type: "fill",
+        source: "roadsalt-environment",
+        filter: [
+          "all",
+          ["==", ["get", "kind"], kind],
+          ["==", ["geometry-type"], "Polygon"],
+        ],
+        paint: {
+          "fill-color": style.fill,
+          "fill-opacity": style.fillOpacity,
+          "fill-outline-color": style.line,
+        },
+      });
+    }
+    if (!map.getLayer(`${layerBase}-lines`)) {
+      addLayer({
+        id: `${layerBase}-lines`,
+        type: "line",
+        source: "roadsalt-environment",
+        filter: [
+          "all",
+          ["==", ["get", "kind"], kind],
+          ["in", ["geometry-type"], ["literal", ["LineString", "MultiLineString"]]],
+        ],
+        paint: {
+          "line-color": style.line,
+          "line-width": kind === "waterway" ? 2 : 1.5,
+          "line-opacity": 0.9,
+        },
+      });
+    }
+    if (!map.getLayer(`${layerBase}-points`)) {
+      addLayer({
+        id: `${layerBase}-points`,
+        type: "circle",
+        source: "roadsalt-environment",
+        filter: [
+          "all",
+          ["==", ["get", "kind"], kind],
+          ["==", ["geometry-type"], "Point"],
+        ],
+        paint: {
+          "circle-radius": 4,
+          "circle-color": style.line,
+          "circle-stroke-color": "#F9F7F7",
+          "circle-stroke-width": 1,
+        },
+      });
+    }
+  }
+
+  if (!map.getLayer("roadsalt-road-network")) {
+    addLayer({
+      id: "roadsalt-road-network",
+      type: "line",
+      source: "roadsalt-roads",
       paint: {
-        "fill-color": "#DBE2EF",
-        "fill-opacity": 0.55,
-        "fill-outline-color": "#3F72AF",
+        "line-color": "#76818A",
+        "line-width": [
+          "interpolate",
+          ["linear"],
+          ["zoom"],
+          10,
+          1.1,
+          15,
+          2.4,
+        ],
+        "line-opacity": 0.88,
       },
     });
-    map.addLayer({
-      id: "roadsalt-environment-lines",
+  }
+  if (!map.getLayer("roadsalt-selected-road")) {
+    addLayer({
+      id: "roadsalt-selected-road",
       type: "line",
-      source: "roadsalt-environment",
-      filter: ["==", ["geometry-type"], "LineString"],
+      source: "roadsalt-roads",
+      filter: ["==", ["get", "roadId"], ""],
       paint: {
         "line-color": "#3F72AF",
-        "line-width": 2,
+        "line-width": 4,
       },
     });
   }
@@ -140,11 +185,26 @@ function updateOverlays(
     | undefined;
   environmentSource?.setData(props.environmentalFeatures ?? EMPTY_ENVIRONMENT);
 
-  map.setFilter("roadsalt-selected-road", [
-    "==",
-    ["get", "roadId"],
-    props.selectedRoadId ?? "",
-  ]);
+  if (map.getLayer("roadsalt-selected-road")) {
+    map.setFilter("roadsalt-selected-road", [
+      "==",
+      ["get", "roadId"],
+      props.selectedRoadId ?? "",
+    ]);
+  }
+  const visibleKinds = props.visibleEnvironmentalKinds ?? [];
+  for (const kind of Object.keys(environmentStyles) as EnvironmentalKind[]) {
+    for (const suffix of ["fill", "lines", "points"]) {
+      const layerId = `roadsalt-${kind}-${suffix}`;
+      if (map.getLayer(layerId)) {
+        map.setLayoutProperty(
+          layerId,
+          "visibility",
+          visibleKinds.includes(kind) ? "visible" : "none",
+        );
+      }
+    }
+  }
 }
 
 export default function MapCanvas(props: MapCanvasProps) {
@@ -218,7 +278,7 @@ export default function MapCanvas(props: MapCanvasProps) {
 
         const onRoadClick = (event: MapMouseEvent) => {
           if (!map || !propsRef.current.onRoadSelect) return;
-          const layers = ["roadsalt-road-network", "roadsalt-risk-roads"];
+          const layers = ["roadsalt-road-network"];
           const availableLayers = layers.filter((layer) => map?.getLayer(layer));
           if (availableLayers.length === 0) return;
 
@@ -240,6 +300,10 @@ export default function MapCanvas(props: MapCanvasProps) {
             properties: {
               ...(feature.properties ?? {}),
               roadId: String(roadId),
+              classification:
+                typeof feature.properties?.classification === "string"
+                  ? feature.properties.classification
+                  : "unclassified",
             },
           });
         };
@@ -285,6 +349,7 @@ export default function MapCanvas(props: MapCanvasProps) {
       roads: props.roads,
       environmentalFeatures: props.environmentalFeatures,
       selectedRoadId: props.selectedRoadId,
+      visibleEnvironmentalKinds: props.visibleEnvironmentalKinds,
       onRoadSelect: props.onRoadSelect,
     };
     propsRef.current = currentProps;
@@ -295,9 +360,11 @@ export default function MapCanvas(props: MapCanvasProps) {
     props.roads,
     props.environmentalFeatures,
     props.selectedRoadId,
+    props.visibleEnvironmentalKinds,
     props.onRoadSelect,
   ]);
 
+  const [layerControlsOpen, setLayerControlsOpen] = useState(false);
   const resetLocation = useCallback(
     () =>
       mapRef.current?.flyTo({
@@ -326,25 +393,53 @@ export default function MapCanvas(props: MapCanvasProps) {
         >
           Reset location
         </button>
+        <button
+          type="button"
+          className="map-toolbar-button"
+          aria-expanded={layerControlsOpen}
+          onClick={() => setLayerControlsOpen((open) => !open)}
+        >
+          Layers
+        </button>
       </div>
+
+      {layerControlsOpen && (
+        <div className="map-layer-controls absolute left-3 top-[3.4rem] z-10">
+          <p className="map-legend-title">Environmental layers</p>
+          {ENVIRONMENTAL_KINDS.map((kind) => (
+            <label key={kind} className="map-layer-option">
+              <input
+                type="checkbox"
+                checked={props.visibleEnvironmentalKinds?.includes(kind) ?? false}
+                onChange={() => props.onEnvironmentalVisibilityChange?.(kind)}
+              />
+              <span>{ENVIRONMENTAL_KIND_LABELS[kind]}</span>
+            </label>
+          ))}
+        </div>
+      )}
 
       <div className="map-legend absolute bottom-3 left-3 z-10">
         <p className="map-legend-title">Map key</p>
         <div className="map-legend-row">
           <span className="map-legend-line map-legend-road" />
-          <span>General road network</span>
+          <span>OpenStreetMap roads</span>
         </div>
         <div className="map-legend-row">
           <span className="map-legend-line map-legend-selected" />
           <span>Selected road</span>
         </div>
-        <div className="map-legend-row map-legend-future">
-          <span className="map-legend-line map-legend-environment" />
-          <span>Environmental features · later stage</span>
+        <div className="map-legend-row">
+          <span className="map-legend-line map-legend-water" />
+          <span>Waterways &amp; water bodies</span>
         </div>
-        <div className="map-legend-row map-legend-future">
-          <span className="map-legend-line map-legend-attention" />
-          <span>Road attention · later stage</span>
+        <div className="map-legend-row">
+          <span className="map-legend-line map-legend-wetland" />
+          <span>Wetlands</span>
+        </div>
+        <div className="map-legend-row">
+          <span className="map-legend-line map-legend-farmland" />
+          <span>Farmland / protected areas</span>
         </div>
       </div>
 
