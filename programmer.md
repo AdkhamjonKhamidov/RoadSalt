@@ -1,6 +1,6 @@
 # RoadSalt developer guide
 
-This project is a small Next.js demo for exploring local roads, weather risk, terrain estimates, and nearby environmental sensitivity in Salisbury, Maryland.
+This project is a small Next.js demo for exploring local roads, forecast weather attention, and nearby mapped environmental sensitivity in Salisbury, Maryland.
 
 ## Install and run
 
@@ -20,7 +20,7 @@ This project is a small Next.js demo for exploring local roads, weather risk, te
 
 ## Files to review first
 
-- `app/page.tsx` — the main experience and layout for the map, weather bar, and road details panel.
+- `app/page.tsx` — thin route entry that renders `RoadSaltDashboard`.
 - `app/components/MapCanvas.tsx` — client-side MapLibre map, controls, GeoJSON layers, and road selection.
 - `app/components/RoadSaltDashboard.tsx` — data loading, weather summary, map-layer controls, and selected-road details.
 - `app/components/map-config.ts` — re-exports shared map configuration for the client map.

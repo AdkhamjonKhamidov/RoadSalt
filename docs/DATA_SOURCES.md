@@ -5,7 +5,7 @@ RoadSalt uses public, real-world data sources without requiring a custom backend
 ## 1. OpenStreetMap Overpass API
 
 ### Purpose
-Used to identify nearby roads, paths, water bodies, wetlands, farmland, and protected or nature areas near the demo location.
+Used to identify nearby roads, waterways, water bodies, wetlands, farmland, and protected or nature areas near the demo location.
 
 ### Implementation status
 Active through the server route `/api/map-data`. The query is limited to the configured 3 km circle around the demo coordinates.
@@ -27,6 +27,8 @@ Active through the server route `/api/map-data`. The query is limited to the con
 - Map completeness varies by region.
 - Some environmental features may not be mapped or may be labeled inconsistently.
 - The feature set is not guaranteed to be complete for every road segment.
+- Footways, paths, cycleways and motorways are not queried; only the road classes listed above are selectable.
+- Wetlands are requested by `natural=wetland` and `wetland=*`. The classifier also recognizes `landcover=wetland`, but the query does not request `landcover`, so wetlands tagged only that way are not returned.
 - Relation boundaries are reconstructed from returned outer member geometry; malformed or incomplete geometry is omitted rather than fabricated.
 - Network access to public Overpass instances may be rate-limited or unavailable; errors are surfaced with a retry option.
 

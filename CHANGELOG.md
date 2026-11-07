@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-11-07 — Claude Code development environment
+
+### What changed
+- Added root `CLAUDE.md` with project rules. It imports `AGENTS.md` so the Next.js version warning stays in context.
+- Added `.claude/settings.json` (conservative permissions), 8 project skills, 7 subagents, 4 slash commands (`/project-status`, `/verify-project`, `/review-changes`, `/update-handover`), and `.claude/launch.json` for the dev server.
+- Ignored `.claude/settings.local.json` in `.gitignore`.
+- Recorded the Claude Code setup in `PROJECT_HANDOVER.md`.
+- Corrected documentation drift found during the audit:
+  - `programmer.md` no longer mentions terrain estimates and now describes `app/page.tsx` as a thin entry.
+  - `docs/DATA_SOURCES.md` no longer claims paths are queried, and it now notes that `landcover=wetland` is not requested.
+
+### Why it changed
+- Future sessions can start from documented architecture, data-integrity rules and verification workflows instead of rediscovering the codebase.
+- No hooks were added. The required checks are fast to run explicitly via `/verify-project`, and favicon protection is handled by a permission deny rule, which is simpler and safer than a hook.
+- No MCP servers were added. The built-in browser pane in the Claude desktop app covers UI verification.
+
+### Files created or modified
+- Created `CLAUDE.md`, `.claude/settings.json`, `.claude/launch.json`, `.claude/agents/*.md`, `.claude/skills/*/SKILL.md`, `.claude/commands/*.md`.
+- Modified `PROJECT_HANDOVER.md`, `programmer.md`, `docs/DATA_SOURCES.md`, `.gitignore`, and this changelog.
+
+### API or data-source changes
+- None. No application code changed.
+
+### Tests and checks
+- JSON validity and agent/skill/command frontmatter checked with a script. Application lint/type/build were not affected by this change.
+
 ## 2026-11-07 — Stage 3: Live map and weather data
 
 ### What changed
