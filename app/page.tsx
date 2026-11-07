@@ -1,67 +1,87 @@
-import Image from "next/image";
+import MapCanvas from "./components/MapCanvas";
+import { DEMO_LOCATION } from "./components/map-config";
 
 export default function Home() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="min-h-screen bg-[#F9F7F7] text-[#112D4E]">
+      <header className="border-b border-[#DBE2EF] bg-[#F9F7F7]">
+        <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4 px-5 py-3 md:px-8">
+          <div>
+            <p className="text-[0.6rem] font-semibold uppercase tracking-[0.3em] text-[#3F72AF]">
+              RoadSalt
+            </p>
+            <p className="mt-1 text-sm font-medium text-[#112D4E]">
+              {DEMO_LOCATION}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-end gap-4 text-sm md:gap-8">
+            <div>
+              <p className="text-[0.6rem] uppercase tracking-[0.2em] text-[#3F72AF]">
+                Weather data
+              </p>
+              <p className="font-medium">Added in a later stage</p>
+            </div>
+            <div>
+              <p className="text-[0.6rem] uppercase tracking-[0.2em] text-[#3F72AF]">
+                Basemap
+              </p>
+              <p className="font-medium">Live tiles</p>
+            </div>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+      </header>
+
+      <main className="mx-auto max-w-[1500px] px-4 py-4 md:px-6 md:py-6">
+        <div className="grid gap-4 xl:grid-cols-[2.2fr_1fr]">
+          <section className="overflow-hidden border border-[#112D4E] bg-[#DBE2EF]/40">
+            <div className="flex items-center justify-between border-b border-[#112D4E]/20 bg-[#F9F7F7] px-4 py-3">
+              <div>
+                <p className="text-[0.6rem] uppercase tracking-[0.25em] text-[#3F72AF]">
+                  Local road map
+                </p>
+                <h2 className="mt-1 text-lg font-semibold">Salisbury area overview</h2>
+              </div>
+
+              <div className="rounded border border-[#112D4E]/20 bg-[#DBE2EF] px-2 py-1 text-xs text-[#112D4E]">
+                3 km radius
+              </div>
+            </div>
+
+            <div className="h-[560px] bg-[#EAF1F7]">
+              <MapCanvas />
+            </div>
+          </section>
+
+          <aside className="border border-[#112D4E] bg-[#F9F7F7] p-4">
+            <div className="mb-4 border-b border-[#DBE2EF] pb-3">
+              <p className="text-[0.6rem] uppercase tracking-[0.25em] text-[#3F72AF]">
+                Road details
+              </p>
+              <h3 className="mt-2 text-2xl font-semibold">No road selected</h3>
+            </div>
+
+            <div className="space-y-5 text-sm leading-6">
+              <p>
+                Road selection and road details will appear when live road
+                geometry is connected. The roads currently visible are part of
+                the basemap and are not yet selectable.
+              </p>
+              <div className="border border-[#DBE2EF] bg-[#DBE2EF]/40 p-3">
+                <p className="text-[0.6rem] font-semibold uppercase tracking-[0.19em] text-[#3F72AF]">
+                  Available in this stage
+                </p>
+                <p className="mt-2">
+                  Live CARTO basemap tiles with OpenStreetMap road and place
+                  labels, plus the marked Salisbury demo location.
+                </p>
+              </div>
+              <p className="text-[#3F72AF]">
+                Weather, terrain, environmental features, and road-attention
+                indicators are not loaded yet.
+              </p>
+            </div>
+          </aside>
         </div>
       </main>
     </div>
