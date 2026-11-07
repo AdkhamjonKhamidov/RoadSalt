@@ -20,12 +20,14 @@ Demo location: **1101 Camden Ave, Salisbury, MD 21801** (cached coordinates in `
 - **Stack:** Next.js 16.4.5 App Router, React 19.3, TypeScript 5 (strict), Tailwind CSS 4 via `@tailwindcss/turbopack`, MapLibre GL JS 6.16. Package manager: **npm** (`package-lock.json`). This Next.js version has breaking changes: read the relevant guide in `node_modules/next/dist/docs/` before writing Next-specific code (see AGENTS.md above).
 - **Layout:**
   - `app/page.tsx`: thin entry that renders `RoadSaltDashboard`.
-  - `app/components/RoadSaltDashboard.tsx`: client component. It owns data loading, UI state (`useState`/`useEffect`/`useMemo`), the weather bar, layer toggles and the selected-road panel.
+  - `app/components/RoadSaltDashboard.tsx`: client component. It owns the selected `location`, location-scoped requests (tagged with a location key and aborted on change, so stale results never overwrite newer ones), the choice of map data source (Overpass over tile data), and the weather, observation, forecast and road-details panels. `LocationSearch.tsx` is the search combobox.
   - `app/components/MapCanvas.tsx`: client component. It owns the MapLibre instance, sources/layers, selection and cleanup. `map-config.ts` re-exports config.
   - `app/lib/`: framework-free logic and types (`demo-config`, `data-types`, `geojson`, `proximity`, `weather`).
-  - `app/api/map-data/route.ts` (Overpass) and `app/api/weather/route.ts` (Open-Meteo): server route handlers.
+  - `app/lib/`: `validation` (guards, cache), `geocoding` (Photon), `geojson` (Overpass query and normalizer), `overpass` (parallel instances, backoff, 25 s deadline, per-location tab cache), `tile-features` (roads and features from basemap tiles), `open-meteo`, `nws`, `proximity`, `weather`, `data-types`, `demo-config`.
+  - Routes: `/api/geocode` (Photon), `/api/weather?lat&lon` (Open-Meteo), `/api/observations?lat&lon` (NWS) and `/api/map-data?lat&lon` (server Overpass, not used by the UI).
+  - `app/api/weather/route.ts` (Open-Meteo): server route handler. `app/api/map-data/route.ts` (Overpass) is a kept server alternative that the UI does not currently call.
 - **State:** local React state only. No global store, context or data-fetching library. Keep it that way unless the handover records an approved change.
-- **API pattern:** the browser calls only same-origin `/api/*` routes. Each route calls the provider server-side with `AbortSignal.timeout`, validates the untrusted JSON field by field, shares in-flight requests (`pending`), caches only *successful* results in process memory, and returns `{ error }` with a meaningful status (429/502/503/504) and `Cache-Control: no-store` on failure.
+- **API pattern:** weather goes through the same-origin `/api/weather` route. OSM map data is requested **directly from the browser** via `loadMapDataInBrowser()`. The user approved this on 2026-11-07, because public Overpass instances accept CORS and the server-side path kept timing out. Any new provider goes through a server route unless the user approves otherwise. Each route calls the provider server-side with `AbortSignal.timeout`, validates the untrusted JSON field by field, shares in-flight requests (`pending`), caches only *successful* results in process memory, and returns `{ error }` with a meaningful status (429/502/503/504) and `Cache-Control: no-store` on failure.
 - **Errors:** surface failures to the user with a retry path. Never swallow them, and never replace them with sample data.
 - **TypeScript:** no `any`. Treat external payloads as `unknown` and narrow them. Shared shapes belong in `app/lib/data-types.ts`. Prefer small pure functions in `app/lib/` so they can be checked in isolation.
 - **Dependencies:** do not add packages without explicit approval.
@@ -58,7 +60,7 @@ Never recommend salt application rates.
 3. Plan before substantial changes. For architecture-level ones, consult the `project-architect` agent.
 4. Reuse existing components, helpers and types.
 5. Implement incrementally.
-6. Test with `/verify-project` (lint, `tsc --noEmit`, build) plus targeted checks. Use the browser to verify UI and map changes.
+6. Test with `/verify-project` (lint, `tsc --noEmit`, `npm test`, build) plus targeted checks. Use the browser to verify UI and map changes.
 7. Review for regressions (`/review-changes`).
 8. Update documentation (`CHANGELOG.md`, and others as relevant; see the `documentation-maintenance` skill).
 9. Report what changed, what was verified and what remains incomplete. Never claim a check passed if it did not run.

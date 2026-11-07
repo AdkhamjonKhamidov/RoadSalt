@@ -8,14 +8,18 @@ import type {
   Map as MapLibreMap,
   MapMouseEvent,
   Marker,
+  Popup,
 } from "maplibre-gl";
 import type {
   EnvironmentalKind,
   EnvironmentalProperties,
+  MapData,
   RoadProperties,
 } from "../lib/data-types";
 import { ENVIRONMENTAL_KIND_LABELS, ENVIRONMENTAL_KINDS } from "../lib/data-types";
+import { extractTileMapData } from "../lib/tile-features";
 import {
+  BASEMAP_PROVIDER,
   BASEMAP_STYLE_URL,
   DEMO_CENTER,
   DEMO_LOCATION,
@@ -25,7 +29,17 @@ import {
 export type RoadFeatureProperties = RoadProperties;
 export type EnvironmentalFeatureProperties = EnvironmentalProperties;
 
+/** Where the map should be centered; a new `key` triggers a fly-to. */
+export type MapFocus = {
+  key: string;
+  latitude: number;
+  longitude: number;
+  zoom: number;
+  label: string;
+};
+
 export type MapCanvasProps = {
+  focus?: MapFocus;
   roads?: FeatureCollection<Geometry, RoadFeatureProperties>;
   environmentalFeatures?: FeatureCollection<
     Geometry,
@@ -35,7 +49,14 @@ export type MapCanvasProps = {
   visibleEnvironmentalKinds?: EnvironmentalKind[];
   onEnvironmentalVisibilityChange?: (kind: EnvironmentalKind) => void;
   onRoadSelect?: (road: Feature<Geometry, RoadFeatureProperties>) => void;
+  /** Receives roads/features read from the loaded basemap tiles after each view change. */
+  onTileData?: (data: MapData) => void;
 };
+
+// Below this zoom, tiles are generalized and drop minor roads and features.
+const MIN_EXTRACTION_ZOOM = 12;
+// Click tolerance in pixels around the pointer when selecting a road.
+const ROAD_HIT_TOLERANCE_PX = 6;
 
 const EMPTY_ROADS: FeatureCollection<Geometry, RoadFeatureProperties> = {
   type: "FeatureCollection",
@@ -96,7 +117,7 @@ function updateOverlays(
         filter: [
           "all",
           ["==", ["get", "kind"], kind],
-          ["==", ["geometry-type"], "Polygon"],
+          ["in", ["geometry-type"], ["literal", ["Polygon", "MultiPolygon"]]],
         ],
         paint: {
           "fill-color": style.fill,
@@ -148,7 +169,7 @@ function updateOverlays(
       type: "line",
       source: "roadsalt-roads",
       paint: {
-        "line-color": "#76818A",
+        "line-color": "#112D4E",
         "line-width": [
           "interpolate",
           ["linear"],
@@ -158,7 +179,7 @@ function updateOverlays(
           15,
           2.4,
         ],
-        "line-opacity": 0.88,
+        "line-opacity": 0.45,
       },
     });
   }
@@ -170,7 +191,8 @@ function updateOverlays(
       filter: ["==", ["get", "roadId"], ""],
       paint: {
         "line-color": "#3F72AF",
-        "line-width": 4,
+        "line-width": 5,
+        "line-opacity": 0.95,
       },
     });
   }
@@ -211,6 +233,8 @@ export default function MapCanvas(props: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const styleLoadedRef = useRef(false);
+  const markerRef = useRef<Marker | null>(null);
+  const popupRef = useRef<Popup | null>(null);
   const propsRef = useRef(props);
   const [loading, setLoading] = useState(true);
   const [mapError, setMapError] = useState<string | null>(null);
@@ -231,8 +255,10 @@ export default function MapCanvas(props: MapCanvasProps) {
         map = new maplibre.Map({
           container: containerRef.current,
           style: BASEMAP_STYLE_URL,
-          center: DEMO_CENTER,
-          zoom: INITIAL_ZOOM,
+          center: propsRef.current.focus
+            ? [propsRef.current.focus.longitude, propsRef.current.focus.latitude]
+            : DEMO_CENTER,
+          zoom: propsRef.current.focus?.zoom ?? INITIAL_ZOOM,
           minZoom: 3,
           maxZoom: 19,
           attributionControl: { compact: false },
@@ -257,22 +283,30 @@ export default function MapCanvas(props: MapCanvasProps) {
           markerElement.setAttribute("aria-label", "Demo location marker");
 
           const popup = new maplibre.Popup({ offset: 17, closeButton: true })
-            .setText(DEMO_LOCATION);
+            .setText(propsRef.current.focus?.label ?? DEMO_LOCATION);
+          popupRef.current = popup;
           locationMarker = new maplibre.Marker({
             element: markerElement,
             anchor: "center",
           })
-            .setLngLat(DEMO_CENTER)
+            .setLngLat(
+              propsRef.current.focus
+                ? [propsRef.current.focus.longitude, propsRef.current.focus.latitude]
+                : DEMO_CENTER,
+            )
             .setPopup(popup)
             .addTo(map);
           locationMarker.togglePopup();
+          markerRef.current = locationMarker;
         };
 
         const onError = (event: ErrorEvent) => {
           if (cancelled || !event.error) return;
           setLoading(false);
           setMapError(
-            "The basemap could not be loaded. Check your connection and try again.",
+            BASEMAP_PROVIDER === "MapTiler"
+              ? "The MapTiler basemap could not be loaded. Check your connection and NEXT_PUBLIC_MAPTILER_API_KEY, or leave the key blank to use the CARTO basemap."
+              : "The basemap could not be loaded. Check your connection and try again.",
           );
         };
 
@@ -282,9 +316,22 @@ export default function MapCanvas(props: MapCanvasProps) {
           const availableLayers = layers.filter((layer) => map?.getLayer(layer));
           if (availableLayers.length === 0) return;
 
-          const feature = map.queryRenderedFeatures(event.point, {
-            layers: availableLayers,
-          })[0];
+          const { x, y } = event.point;
+          const feature = map.queryRenderedFeatures(
+            [
+              [x - ROAD_HIT_TOLERANCE_PX, y - ROAD_HIT_TOLERANCE_PX],
+              [x + ROAD_HIT_TOLERANCE_PX, y + ROAD_HIT_TOLERANCE_PX],
+            ],
+            { layers: availableLayers },
+          )[0];
+          // Rendered features are clipped to tiles; select the full merged road.
+          const fullRoad = propsRef.current.roads?.features.find(
+            (road) => road.properties.roadId === String(feature?.properties?.roadId),
+          );
+          if (fullRoad) {
+            propsRef.current.onRoadSelect?.(fullRoad);
+            return;
+          }
           const roadId = feature?.properties?.roadId;
           if (
             !feature ||
@@ -308,14 +355,33 @@ export default function MapCanvas(props: MapCanvasProps) {
           });
         };
 
+        // Read roads/features from loaded tiles once the map settles after a
+        // view change. Updating our overlays also ends in "idle", so the view
+        // key prevents re-extracting (and an update loop) when nothing moved.
+        let lastExtractedView = "";
+        const onIdle = () => {
+          if (!map || !styleLoadedRef.current) return;
+          const zoom = map.getZoom();
+          if (zoom < MIN_EXTRACTION_ZOOM) return;
+          const center = map.getCenter();
+          const viewKey = `${center.lng.toFixed(5)},${center.lat.toFixed(5)},${zoom.toFixed(2)}`;
+          if (viewKey === lastExtractedView) return;
+          const data = extractTileMapData(map, BASEMAP_PROVIDER);
+          if (!data) return;
+          lastExtractedView = viewKey;
+          propsRef.current.onTileData?.(data);
+        };
+
         map.on("load", onLoad);
         map.on("error", onError);
         map.on("click", onRoadClick);
+        map.on("idle", onIdle);
         const initializedMap = map;
         removeMapListeners = () => {
           initializedMap.off("load", onLoad);
           initializedMap.off("error", onError);
           initializedMap.off("click", onRoadClick);
+          initializedMap.off("idle", onIdle);
         };
 
         resizeObserver = new ResizeObserver(() => map?.resize());
@@ -338,6 +404,8 @@ export default function MapCanvas(props: MapCanvasProps) {
       resizeObserver?.disconnect();
       removeMapListeners?.();
       locationMarker?.remove();
+      markerRef.current = null;
+      popupRef.current = null;
       map?.remove();
       mapRef.current = null;
       styleLoadedRef.current = false;
@@ -346,11 +414,13 @@ export default function MapCanvas(props: MapCanvasProps) {
 
   useEffect(() => {
     const currentProps = {
+      focus: props.focus,
       roads: props.roads,
       environmentalFeatures: props.environmentalFeatures,
       selectedRoadId: props.selectedRoadId,
       visibleEnvironmentalKinds: props.visibleEnvironmentalKinds,
       onRoadSelect: props.onRoadSelect,
+      onTileData: props.onTileData,
     };
     propsRef.current = currentProps;
     if (mapRef.current && styleLoadedRef.current) {
@@ -362,14 +432,32 @@ export default function MapCanvas(props: MapCanvasProps) {
     props.selectedRoadId,
     props.visibleEnvironmentalKinds,
     props.onRoadSelect,
+    props.onTileData,
+    props.focus,
   ]);
+
+  // Fly to a newly selected location and move the marker with it.
+  const focusKey = props.focus?.key;
+  useEffect(() => {
+    const focus = propsRef.current.focus;
+    const map = mapRef.current;
+    if (!focus || !map) return;
+    map.flyTo({ center: [focus.longitude, focus.latitude], zoom: focus.zoom, duration: 900 });
+    markerRef.current?.setLngLat([focus.longitude, focus.latitude]);
+    popupRef.current?.setText(focus.label);
+    if (markerRef.current && !markerRef.current.getPopup()?.isOpen()) {
+      markerRef.current.togglePopup();
+    }
+  }, [focusKey]);
 
   const [layerControlsOpen, setLayerControlsOpen] = useState(false);
   const resetLocation = useCallback(
     () =>
       mapRef.current?.flyTo({
-        center: DEMO_CENTER,
-        zoom: INITIAL_ZOOM,
+        center: propsRef.current.focus
+          ? [propsRef.current.focus.longitude, propsRef.current.focus.latitude]
+          : DEMO_CENTER,
+        zoom: propsRef.current.focus?.zoom ?? INITIAL_ZOOM,
         duration: 500,
       }),
     [],
@@ -381,11 +469,11 @@ export default function MapCanvas(props: MapCanvasProps) {
         ref={containerRef}
         className="absolute inset-0"
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
-        aria-label="Interactive map of roads around Salisbury, Maryland"
+        aria-label={`Interactive road map around ${props.focus?.label ?? DEMO_LOCATION}`}
       />
 
       <div className="map-toolbar absolute left-3 top-3 z-10 flex items-center gap-2">
-        <span className="map-toolbar-label">Demo area</span>
+        <span className="map-toolbar-label">Selected location</span>
         <button
           type="button"
           className="map-toolbar-button"

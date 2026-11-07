@@ -1,128 +1,116 @@
 # Data sources
 
-RoadSalt uses public, real-world data sources without requiring a custom backend. CARTO basemap tiles, OpenStreetMap Overpass, a cached Nominatim lookup, and Open-Meteo are active. Open-Meteo Elevation is planned, not yet connected.
+RoadSalt uses only public, real-world data. Every provider is called with a timeout. Every response is validated and normalized in `app/lib/` before the UI sees it, and a failure is shown as unavailable, never replaced with sample data. All location-dependent data follows the **selected location**, which defaults to 1101 Camden Ave, Salisbury, MD 21801.
 
-## 1. OpenStreetMap Overpass API
+| Provider | Used for | Called from | Key |
+|---|---|---|---|
+| Photon (OpenStreetMap) | Location search / autocomplete | Server route `/api/geocode` | None |
+| MapTiler or CARTO vector tiles (OpenStreetMap) | Basemap; roads and features shown immediately | Browser (MapLibre) | MapTiler: optional public key |
+| OpenStreetMap Overpass API | Detailed roads and features (OSM IDs, tags, unnamed and service roads) | Browser (`app/lib/overpass.ts`) | None |
+| Open-Meteo Forecast | Current conditions and 24-hour forecast | Server route `/api/weather` | None |
+| National Weather Service (api.weather.gov) | Measured station observations and active alerts (US only) | Server route `/api/observations` | None |
 
-### Purpose
-Used to identify nearby roads, waterways, water bodies, wetlands, farmland, and protected or nature areas near the demo location.
+## Normalized data structures (`app/lib/data-types.ts`)
 
-### Implementation status
-Active through the server route `/api/map-data`. The query is limited to the configured 3 km circle around the demo coordinates.
+- **Location:** `id`, `name`, `displayName`, `latitude`, `longitude`, `boundingBox` (`[west, south, east, north]` or null), `locality`, `region`, `country`, `placeType`, `source`.
+- **Road** (GeoJSON feature properties, `RoadProperties`):
+  - `roadId`: `way/<id>` from Overpass, or `tile:<class>:<name>` from tiles.
+  - `osmId`: null for tile data.
+  - `name`, `classification` (OSM highway value), `ref`.
+  - `tags`: a whitelist of highway, name, ref, service, surface, lanes, maxspeed, oneway, bridge, tunnel, lit and sidewalk.
+  - Geometry is a GeoJSON `LineString` or `MultiLineString` in `[lon, lat]`.
+- **EnvironmentalFeature** (`EnvironmentalProperties`):
+  - `featureId`, `osmId`, `name`.
+  - `kind`: waterway, water, wetland, farmland or protected.
+  - `subtype`: for example stream, river, pond, marsh or farmland.
+  - Geometry is a LineString or (Multi)Polygon.
+- **WeatherData:** `latitude`, `longitude`, `timezone`, and `current` with `time`, `temperature`, `apparentTemperature`, `relativeHumidity`, `windSpeed`, `precipitation` and `weatherCode`. Optional values are `null` when not provided. Also `hourly` (24 hours from the current hour), `updatedAt` and `source`.
+- **ObservationData:** `stationId`, `stationName`, `observation` (measured values; `null` = not reported), `alerts` (`null` = request failed, `[]` = none active), and per-part error strings.
 
-### Data retrieved
-- primary, secondary, tertiary, residential, unclassified, and service road geometry
-- road names and highway classifications when mapped
-- waterways and bodies of water
-- wetlands
-- farmland and agricultural land
-- protected or nature areas when mapped
+## Parsing rules (all parsers)
 
-### Update behavior
-- One bounded request is made when the page loads. Successful data is cached in process memory for 15 minutes and simultaneous requests share the same upstream request.
-- A secondary public Overpass endpoint is tried if the primary endpoint returns a server error or rate limit.
-- Requests time out after 15 seconds; a timeout is surfaced immediately instead of waiting for another endpoint timeout.
+- Input is `unknown` and narrowed field by field (`app/lib/validation.ts`).
+- Invalid coordinates (non-numeric or out of range), too-short geometry, unexpected geometry types and malformed elements are **dropped**, never repaired with guesses.
+- Missing optional values stay `null` and are shown as "Not reported". Missing required values reject the response with a clear error.
+- Duplicates are removed: Overpass elements by `type/id`; geocoding results by OSM object, and by the same label within about 10 km (for example a city's boundary and its center point).
+- Source IDs are preserved (OSM way and relation IDs, Photon OSM IDs, NWS station IDs).
+- Parsers are covered by `npm test` (`tests/*.test.ts`), including malformed inputs.
 
-### Limitations
-- Map completeness varies by region.
-- Some environmental features may not be mapped or may be labeled inconsistently.
-- The feature set is not guaranteed to be complete for every road segment.
-- Footways, paths, cycleways and motorways are not queried; only the road classes listed above are selectable.
-- Wetlands are requested by `natural=wetland` and `wetland=*`. The classifier also recognizes `landcover=wetland`, but the query does not request `landcover`, so wetlands tagged only that way are not returned.
-- Relation boundaries are reconstructed from returned outer member geometry; malformed or incomplete geometry is omitted rather than fabricated.
-- Network access to public Overpass instances may be rate-limited or unavailable; errors are surfaced with a retry option.
+## 1. Photon geocoder (location search)
 
-### Fallback behavior
-- If no mapped feature is found, the interface should show `No mapped sensitive feature found nearby` instead of implying the area is safe.
+- **Endpoint:** `https://photon.komoot.io/api/?q=<query>&limit=6&lang=en&lat=<bias>&lon=<bias>`, called through `/api/geocode`.
+- **Why Photon:** Nominatim's usage policy forbids client-driven autocomplete. Photon is an OpenStreetMap-based geocoder built for search-as-you-type. It handles addresses, cities, ZIP codes and landmarks.
+- **Request discipline:**
+  - The client waits 350 ms after typing stops and sends nothing for queries under 3 characters.
+  - Each new keystroke cancels the pending request.
+  - The server caches results for 1 hour (up to 500 queries), shares in-flight duplicates, sends an identifying `User-Agent`, and times out after 8 seconds.
+- **Bias:** results are weighted toward the current map center (rounded to 0.1°). So "Ocean City" typed near Salisbury may list local matches first.
+- **Attribution:** the suggestion panel shows "Search by Photon · © OpenStreetMap contributors".
+- **Limits:** the public instance is fair-use and has no SLA. For heavy production use, self-host Photon or use a commercial geocoder.
 
-## 2. OpenStreetMap Nominatim
+## 2. Vector-tile roads and features (immediate)
 
-### Purpose
-Used to look up the fixed demo address. The successful lookup result is cached in source so Nominatim is not requested on each page load.
+- **Source:** the basemap's OpenMapTiles-schema vector tiles (MapTiler `openmaptiles` source, or CARTO). `app/lib/tile-features.ts` reads them with MapLibre `querySourceFeatures` after each map move. No extra network request is made.
+- **Roads:** `transportation_name` features with class motorway, trunk, primary, secondary, tertiary or minor and a name. Tile pieces of the same named road are merged into one road. Unnamed roads are not included (tiles carry no IDs to tell them apart).
+- **Features:**
+  - `waterway` (all classes).
+  - `water` (excluding swimming pools).
+  - `landcover` class wetland or farmland.
+  - `park` class nature_reserve or national_park. Generic `protected_area` is excluded, because tiles don't say whether it's natural or cultural.
+  - Unnamed features of one kind are merged into one feature.
+- **Coverage:** the loaded map area, not a fixed radius. The UI labels this source "OSM map tiles", and road details say that no OSM way ID is available.
 
-### Data retrieved
-- latitude and longitude for the target address
-- display-friendly location label
+## 3. OpenStreetMap Overpass API (detail, when available)
 
-### Update behavior
-- One lookup when the configured demo address is changed.
-
-### Limitations
-- Geocoding can be approximate in some cases.
-- Rate limits may apply under heavy use.
-- If a new address cannot be geocoded, show an error and use only a clearly documented approximate location for that same area.
-
-## 3. CARTO Positron basemap
-
-### Purpose
-Provides the live, light vector basemap used for roads, place labels, and geographic context. The configured MapLibre style is `https://basemaps.cartocdn.com/gl/positron-gl-style/style.json`.
-
-### Data retrieved
-- Vector map tiles, labels, fonts, and style assets.
-- The configured style identifies OpenStreetMap contributors and CARTO in its attribution.
-
-### Update behavior
-- The browser requests map style assets and vector tiles as the user loads and navigates the map.
-
-### Attribution and limitations
-- Keep the required OpenStreetMap and CARTO attribution visible on the map.
-- The current public style endpoint works without an API key but is subject to CARTO usage terms and service limits.
-- Public endpoints are intended for development and demos, not unrestricted production traffic. Confirm the provider's current terms and use an appropriate plan or permitted tile hosting for production.
-- Basemap road lines are not yet RoadSalt road-selection data or a risk overlay.
-
-### Fallback behavior
-- If the style or tiles fail, show a map loading error; do not substitute a different city or a fabricated map.
+- **Endpoints:** queried in parallel, first valid answer wins:
+  - `https://overpass-api.de/api/interpreter`
+  - `https://overpass.kumi.systems/api/interpreter`
+  - `https://overpass.private.coffee/api/interpreter`
+- **Query** (`overpassQuery`): a global `[bbox:…]` of ±`SEARCH_RADIUS_METERS` (2 km, so about 4 × 4 km) around the selected location, with `[timeout:20]` and `out geom qt`.
+  - Roads: `highway` ∈ motorway, trunk, primary, secondary, tertiary, unclassified, residential, living_street, service, excluding `service=driveway|parking_aisle|drive-through`.
+  - Features: `waterway`, `natural=water|wetland`, `water`, `wetland`, `landuse=farmland|farmyard|orchard|vineyard|plant_nursery`, `boundary=protected_area|national_park`, `leisure=nature_reserve` and `protect_class`, for ways and relations. Cultural protections (`protect_class` 21–29, or a "historic" `protection_title`) are excluded.
+- **Reliability:**
+  - Busy answers (429, or 5xx "at capacity, request queue is full") are retried after 2, 4 and 8 seconds, within one 25-second deadline.
+  - The most informative error is shown, with Retry. Failures are logged to the console as `[map-data] …`.
+  - Successes are cached per location in `sessionStorage` for 15 minutes.
+  - When Overpass succeeds, its data replaces the tile data for that location. When it fails, the tile data stays and the map remains usable.
+- **Limits:** public instances are often at capacity, so detailed data may be unavailable for a while. Relation boundaries are rebuilt from returned outer members, and incomplete rings become lines. `/api/map-data?lat=..&lon=..` offers the same query server-side, but the UI doesn't use it.
 
 ## 4. Open-Meteo Forecast API
 
-### Purpose
-Used to retrieve current conditions and the next 24 hours of relevant weather values.
+- **Endpoint:** `https://api.open-meteo.com/v1/forecast`, via `/api/weather?lat=..&lon=..`.
+  - `current` = temperature_2m, apparent_temperature, relative_humidity_2m, wind_speed_10m, precipitation, weather_code.
+  - `hourly` = temperature_2m, precipitation_probability, precipitation, snowfall.
+  - Also `forecast_days=2` and `timezone=auto`.
+- **Times:** returned in the location's own time zone. The UI shows them as-is and names the zone.
+- **Caching:** 10 minutes per point (rounded to about 100 m), up to 200 points. In-flight requests are shared; the timeout is 15 seconds. An invalid `lat`/`lon` gets a 400.
+- **Limits:** these are model values, not road observations. Air temperature is not pavement temperature and cannot confirm ice. Free tier is for non-commercial use, about 10,000 calls a day. Attribution: CC BY 4.0, "Weather data by Open-Meteo.com".
 
-### Implementation status
-Active through the server route `/api/weather`.
+## 5. National Weather Service API
 
-### Data retrieved
-- air temperature
-- precipitation amount
-- precipitation probability
-- snowfall
-- weather code
-- hourly temperature and precipitation expectations
-- the hourly response is limited to the next 24 hours for the UI
+- **Flow** (via `/api/observations?lat=..&lon=..`):
+  1. `GET /points/{lat},{lon}` finds the nearby station list (cached 24 h).
+  2. The nearest station is the first in that list.
+  3. `GET /stations/{id}/observations/latest` gets the latest measurement.
+  4. `GET /alerts/active?point={lat},{lon}` gets active alerts.
+- **Headers:** an identifying `User-Agent` and `Accept: application/geo+json`.
+- **Caching and timeouts:** complete answers are cached 5 minutes; the timeout is 10 seconds per request.
+- **Partial failures:** observation and alerts fail independently. If one fails, the other is still shown.
+- **Limits:** United States only (other locations get a clear 404 message). Values are station air measurements, often from an airport, not road-surface readings. Observations older than 2 hours are marked as such. NWS data is US public domain.
 
-### Update behavior
-- Current and hourly values are requested for the configured demo coordinates and Eastern Time.
-- Successful responses are cached for 10 minutes. Provider/network errors are shown rather than replaced with sample values.
+## 6. Basemap (MapTiler or CARTO)
 
-### Limitations
-- It captures atmospheric weather, not pavement temperature.
-- Data should be used to describe a potential icing indicator, not to say a road definitely has ice.
-- Rain/snow and probability values are forecast model estimates, not road observations.
-- RoadSalt's low/moderate/elevated categories are simple demo rules, not calibrated operational guidance.
+- **With `NEXT_PUBLIC_MAPTILER_API_KEY`:** `https://api.maptiler.com/maps/<NEXT_PUBLIC_MAPTILER_STYLE_ID or positron>/style.json?key=…`. The key is public by design; restrict it to your domains in the MapTiler dashboard.
+- **Without a key:** CARTO Positron `https://basemaps.cartocdn.com/gl/positron-gl-style/style.json`, which is for development and demos.
+- **Attribution:** the map's attribution control shows "© MapTiler © OpenStreetMap contributors" or "© CARTO © OpenStreetMap contributors". It must stay visible.
 
-## 5. Open-Meteo Elevation API
+## Not connected
 
-### Purpose
-Used to estimate terrain change around selected road coordinates.
+- Open-Meteo Elevation, slopes and terrain: out of scope unless an approved milestone requires them.
+- Nominatim: used once, earlier, to find the default coordinates (cached in `app/lib/demo-config.ts`). It is not called at runtime.
 
-### Implementation status
-Planned for a later stage; no elevation request is currently made.
+## Usage notes
 
-### Data retrieved
-- elevation samples for road areas
-- distance and slope estimates
-
-### Update behavior
-- Sampled at the time a road is evaluated or when a new area is inspected.
-
-### Limitations
-- The elevation model is coarse and should be labeled as `Estimated terrain incline`.
-- It cannot replace engineering-grade slope analysis.
-- Insufficient or uneven data should be presented as `Insufficient elevation data`.
-
-## Attribution and usage notes
-
-- Respect each provider's terms of use and rate-limit guidance.
-- Keep API requests server-side where practical.
-- Do not silently substitute generic values for failed live data.
-- If a fallback is necessary, clearly flag it as sample data and explain the reason.
+- Respect each provider's terms and rate limits. Don't add polling or load tests against public instances.
+- Never substitute generic or sample values for failed live data.
+- Absence of mapped features is not evidence that an area is environmentally safe. Proximity is not evidence of pollution.

@@ -33,7 +33,7 @@ Environmental sensitivity must never be presented as overriding road safety. Any
 
 ## Data limitations to disclose
 - OSM coverage is volunteer-mapped and incomplete. Absence of features is not evidence of absence.
-- Results are limited to features returned by the 3 km query. Features outside the radius, or omitted for malformed geometry, are not considered.
+- Results are limited to the data loaded for the selected location: Overpass (±2 km box) or the loaded basemap tiles. Features outside it, or dropped for malformed geometry, are not considered. Tile data has no generic `protected_area` and no unnamed roads.
 - Air temperature is not pavement temperature. Forecasts are uncertain.
 
 ## Wording

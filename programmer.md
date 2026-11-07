@@ -20,25 +20,71 @@ This project is a small Next.js demo for exploring local roads, forecast weather
 
 ## Files to review first
 
+UI (client components):
 - `app/page.tsx` — thin route entry that renders `RoadSaltDashboard`.
-- `app/components/MapCanvas.tsx` — client-side MapLibre map, controls, GeoJSON layers, and road selection.
-- `app/components/RoadSaltDashboard.tsx` — data loading, weather summary, map-layer controls, and selected-road details.
-- `app/components/map-config.ts` — re-exports shared map configuration for the client map.
-- `app/lib/demo-config.ts` — central demo coordinates, 3 km radius, map zoom, and environmental distance thresholds.
-- `app/lib/geojson.ts` — Overpass parsing and OSM way/relation conversion.
-- `app/lib/proximity.ts` — approximate road-to-feature distance and sensitivity classification.
-- `app/lib/weather.ts` — weather code labels, precipitation status, and attention rules.
-- `app/api/map-data/route.ts` — cached server-side Overpass request.
-- `app/api/weather/route.ts` — cached server-side Open-Meteo request.
-- `app/layout.tsx` — app metadata and global document shell.
-- `app/globals.css` — theme colors, typography, and core styling.
-- `README.md` — public-facing project summary.
-- `CHANGELOG.md` — implementation record.
-- `docs/DATA_SOURCES.md` — data-source documentation.
+- `app/components/RoadSaltDashboard.tsx` — selected location, location-scoped data loading (each request tagged with the location key and aborted on change, so older results can't overwrite newer ones), map data source choice (Overpass detail over tile data), weather/observation/forecast panels, and road details.
+- `app/components/LocationSearch.tsx` — accessible search combobox: 350 ms debounce, 3-character minimum, cancellation, loading/empty/error states, arrow keys, Enter and Escape.
+- `app/components/MapCanvas.tsx` — MapLibre map, overlay layers, road selection (6 px click tolerance), flying to the selected location (`focus` prop), and tile extraction after each move.
+
+Data services and parsing (`app/lib/`, framework-free):
+- `data-types.ts` — normalized types: `Location`, `RoadProperties`, `EnvironmentalProperties`, `MapData`, `WeatherData`, `ObservationData`.
+- `validation.ts` — runtime guards, `lat`/`lon` query validation, `ExpiringCache`.
+- `geocoding.ts` — Photon URL, response parser, deduplication, zoom by place type.
+- `geojson.ts` — Overpass query (bbox) and OSM → GeoJSON normalization (IDs, tags, subtypes, dedup, drops malformed geometry).
+- `overpass.ts` — Overpass fetching: parallel instances, backoff, 25 s deadline, per-location `sessionStorage` cache.
+- `tile-features.ts` — roads and features read from the loaded basemap vector tiles.
+- `open-meteo.ts` — Open-Meteo URL and parser (optional values stay null).
+- `nws.ts` — NWS station, observation and alert parsers.
+- `proximity.ts` — approximate road-to-feature distance and sensitivity level.
+- `weather.ts` — weather code labels, precipitation wording, attention rule.
+- `demo-config.ts` — default location, zoom, Overpass radius (2 km), thresholds, basemap selection.
+
+API routes (server):
+- `app/api/geocode/route.ts` — `GET /api/geocode?q=…[&lat&lon]`, Photon proxy with a 1-hour cache.
+- `app/api/weather/route.ts` — `GET /api/weather?lat&lon`, Open-Meteo with a 10-minute per-point cache.
+- `app/api/observations/route.ts` — `GET /api/observations?lat&lon`, NWS nearest station plus alerts (US only).
+- `app/api/map-data/route.ts` — `GET /api/map-data?lat&lon`, server-side Overpass alternative (not used by the UI).
+
+Tests: `tests/*.test.ts` (Node's built-in test runner; `tests/register.mjs` resolves extensionless imports).
+
+Docs: `README.md` (public), `CHANGELOG.md`, `PROJECT_HANDOVER.md`, `docs/DATA_SOURCES.md` (endpoints, parsing, caching, limits, attribution).
+
+## Checks
+
+```bash
+npm run lint
+```
+```bash
+npx tsc --noEmit
+```
+```bash
+npm test
+```
+```bash
+npm run build
+```
+
+`npm test` needs Node 22.18 or newer (built-in TypeScript type stripping). It uses no extra packages. Tests use small synthetic fixtures shaped like real provider responses; these never reach the UI.
+
+## Testing location search and roads by hand
+
+1. Run `npm run dev` and open the app. It starts at 1101 Camden Ave, Salisbury, MD. Roads appear within a few seconds, and the status line shows "OSM map tiles".
+2. Type in the search box, for example `Baltimore`, `21801`, `1101 Camden Ave Salisbury` or `Lincoln Memorial`. Suggestions appear after a short pause. Use ↑/↓ and Enter, or click. Escape closes the list, and × clears it.
+3. The map flies to the place. The title, weather, NWS station and roads all change to the new location.
+4. Click a road line (navy). The panel shows its OSM attributes, nearby mapped features and local weather. With Overpass detail loaded, it also shows the OSM way ID (linked), tags, and unnamed or service roads.
+5. If "Detailed OSM data unavailable" appears, public Overpass servers are busy. The tile data stays usable; press Retry later.
+6. A location outside the US (for example `London`) shows weather from Open-Meteo, and NWS reports that it covers US locations only.
 
 ## Environment configuration
 
-The map, Overpass, and Open-Meteo integrations require no `.env.local` variables, secret, or API key. The basemap style and demo data configuration are in `app/lib/demo-config.ts`.
+All variables are optional. With none set, the app runs on keyless public services: the CARTO basemap, Photon, Overpass, Open-Meteo and the National Weather Service. Put local values in `.env.local`, which is gitignored. Restart `npm run dev` after changing it. `NEXT_PUBLIC_` values are inlined at build time, so rebuild after changing them for production.
+
+| Variable | Purpose | Blank behavior |
+|---|---|---|
+| `NEXT_PUBLIC_MAPTILER_API_KEY` | MapTiler key for the basemap. It is browser-visible by design, so restrict it to your domains in the MapTiler dashboard. | Uses the CARTO Positron basemap. |
+| `NEXT_PUBLIC_MAPTILER_STYLE_ID` | MapTiler map ID, such as `positron`, `dataviz` or `streets-v2`. Used only when a key is set. | `positron` |
+
+The style selection lives in `app/lib/demo-config.ts` (`BASEMAP_PROVIDER`, `BASEMAP_STYLE_URL`). A key or style ID containing characters other than letters, digits, `_` and `-` is ignored, and the CARTO style is used. If MapTiler rejects the key, for example because it's invalid or the domain isn't allowed, the map shows a basemap error that names the variable. Overpass and Open-Meteo need no keys.
 
 ## Map behavior and data sources
 
@@ -75,7 +121,7 @@ Current integrations:
 
 The weather attention indicator is `Elevated` when forecast precipitation or snow coincides with freezing air temperature, `Moderate` when precipitation is forecast near freezing (0 to 3 °C), and `Low` otherwise. This is a demo indicator, not a road-surface observation. Environmental sensitivity uses the configurable `high` and `moderate` distance thresholds in `app/lib/demo-config.ts`. Road-to-feature distances use a local planar approximation suitable for this small demo radius; they are not survey measurements. No map data means sensitivity is `Unknown`.
 
-No map API key or environment variable is required.
+No map API key or environment variable is required. An optional MapTiler basemap can be enabled; see "Environment configuration".
 
 ## Demo address and radius
 
@@ -85,13 +131,14 @@ The default demo address is:
 1101 Camden Ave, Salisbury, MD 21801
 ```
 
-The map opens at approximately zoom 14 around that point. The Overpass query radius is configured by `SEARCH_RADIUS_METERS` in `app/lib/demo-config.ts` (default 3,000 m). Adjust `INITIAL_ZOOM` in the same file to change the initial map scale. Environmental proximity levels are controlled by `ENVIRONMENTAL_THRESHOLDS_METERS` there.
+The map opens at approximately zoom 14 around that point. This is the default location; users can search for any other place, and it is never replaced by browser geolocation (`DEFAULT_LOCATION` in `app/lib/demo-config.ts`). The Overpass query box extends `SEARCH_RADIUS_METERS` (default 2,000 m) around the selected location. Adjust `INITIAL_ZOOM` in the same file to change the initial map scale. Environmental proximity levels are controlled by `ENVIRONMENTAL_THRESHOLDS_METERS` there.
 
 ## Troubleshooting
 
 - If the app does not render, check that dependencies were installed and the dev server is running.
 - If a live API fails, confirm network access, API path formatting, and response status.
 - If map or weather data seem stale, verify the request timing and whether cached responses are being reused.
+- If roads never load, open the browser console and look for `[map-data]` lines. "Busy (HTTP 502)" or "no response within 25s" means the public Overpass instances are at capacity. Wait a few minutes and press Retry; the code already backs off and tries three instances.
 - If Overpass is unavailable or rate-limited, the map remains usable with CARTO basemap tiles; an error and retry option are shown instead of fabricated features.
 - If an OSM feature is absent, remember local map coverage may be incomplete.
 - The map/weather APIs can be retried from the displayed error state; no failure is silently replaced with sample data.

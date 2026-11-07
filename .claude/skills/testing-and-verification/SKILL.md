@@ -13,7 +13,8 @@ npm run lint
 npx tsc --noEmit
 npm run build
 ```
-- There is **no `npm test` script and no test framework.** Do not claim tests ran. Do not add a framework without approval.
+- `npm test` runs `tests/*.test.ts` with Node's built-in runner (`node:test`, type stripping, `tests/register.mjs` for extensionless imports). It needs no packages. Add parser and logic tests there; don't add a framework without approval.
+- Run all four: `npm run lint`, `npx tsc --noEmit`, `npm test`, `npm run build`.
 - If `public/assets/maplibre-gl-worker.mjs` is missing (fresh clone without postinstall), run `node scripts/copy-maplibre-worker.mjs` (ask first).
 - `npm run build` can take a minute or more. Run it in the background if needed.
 
@@ -28,8 +29,9 @@ Synthetic inputs are acceptable **only** for logic checks and must never be show
 
 ## 3. Live API checks (needs `npm run dev`)
 ```bash
-curl -sS -w "\nHTTP %{http_code}\n" http://localhost:3000/api/weather | tail -c 300
-curl -sS -w "\nHTTP %{http_code}\n" http://localhost:3000/api/map-data | tail -c 300
+curl -sS -w "\nHTTP %{http_code}\n" "http://localhost:3000/api/weather?lat=38.348&lon=-75.607" | tail -c 300
+curl -sS -w "\nHTTP %{http_code}\n" "http://localhost:3000/api/observations?lat=38.348&lon=-75.607" | tail -c 300
+curl -sS -w "\nHTTP %{http_code}\n" "http://localhost:3000/api/geocode?q=Baltimore" | tail -c 300
 ```
 Record the HTTP status, `source`, `hourly.length` (expect up to 24), road and environment feature counts, and `updatedAt`. A 504/429/503 is a real provider outcome. Report it. Overpass has timed out in this environment before.
 

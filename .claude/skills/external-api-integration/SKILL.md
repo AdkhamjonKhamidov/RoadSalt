@@ -1,6 +1,6 @@
 ---
 name: external-api-integration
-description: Procedures for RoadSalt's server-side API integrations (Overpass in app/api/map-data, Open-Meteo in app/api/weather). Covers request architecture, response validation, timeouts, endpoint fallback, caching, rate limits, environment configuration, attribution and documentation. Use when adding, changing or debugging a live data request.
+description: Procedures for RoadSalt's API integrations (Overpass via app/lib/overpass.ts, loaded in the browser; Open-Meteo via the app/api/weather server route). Covers request architecture, response validation, timeouts, endpoint fallback, caching, rate limits, environment configuration, attribution and documentation. Use when adding, changing or debugging a live data request.
 ---
 
 # External API integration (RoadSalt)
@@ -11,7 +11,9 @@ Browser ──fetch──▶ /api/<name> (Next route handler, server) ──fetc
                      │ validate → cache success → JSON
                      └ on failure → { error } + 4xx/5xx + no-store
 ```
-- The client never calls providers directly. That keeps validation, caching, request identification and any future secrets server-side.
+- **Exception (approved 2026-11-07):** OSM data is fetched from the browser with `loadMapDataInBrowser()` in `app/lib/overpass.ts`. The public Overpass instances accept CORS, and the server path kept timing out. It still uses the same validation (`overpassToGeoJSON`) and never uses sample data. Shared logic lives in `fetchOverpassMapData()`, which is also used by the kept `/api/map-data` route, so do not duplicate it.
+- All other providers go through server routes. That keeps validation, caching, request identification and any future secrets server-side.
+- Overpass etiquette: instances that answer 429 or 502/504 ("at capacity, request queue is full") must be retried with exponential backoff, never hammered. Do not load-test them while debugging. Two or three verification loads are enough.
 - Route handler shape (follow `app/api/weather/route.ts`):
   - module-level `cached` (`{ expiresAt, data }`) and `pending` promise,
   - a typed `ProviderError(message, status)`,

@@ -11,8 +11,8 @@ description: RoadSalt map and geospatial procedures. Covers OSM tag conventions,
 - Distances in `proximity.ts` use a local planar approximation, which is adequate at a 3 km scale. Present results as "approximately X m", never as survey-grade figures.
 
 ## Overpass query (`overpassQuery`)
-- Uses one bounded `around:${SEARCH_RADIUS_METERS}` union, `[out:json][timeout:12]`, and `out geom` (inline geometry, so there is no second node lookup).
-- Roads: `highway ~ primary|secondary|tertiary|residential|unclassified|service`. Footways, paths and motorways are not queried.
+- Uses a global `[bbox:s,w,n,e]` (from `boundingBox()`, ±`SEARCH_RADIUS_METERS`), `[out:json][timeout:12]`, `wr[...]` statements for ways and relations, and `out geom qt` (inline geometry, unsorted). Do not go back to per-statement `around:` filters, which are much slower.
+- Roads: `highway ~ primary|secondary|tertiary|residential|unclassified` (`ROAD_CLASSES`). Service roads, footways, paths and motorways are not queried.
 - Environment: `waterway`, `natural=water|wetland`, `water`, `wetland`, `landuse=farmland|farmyard|orchard|vineyard|plant_nursery`, `boundary=protected_area|national_park`, `leisure=nature_reserve`, `protect_class`, on both ways and relations.
 - Before adding a tag class or growing the radius, estimate the response-size and timeout impact. Public Overpass instances have already timed out at the 15 s client limit. Prefer narrowing over widening.
 - Test queries manually in overpass-turbo or by reading the OSM wiki. Do not hammer public instances (see `external-api-integration`).

@@ -120,10 +120,16 @@ function classifyEnvironment(
   ) {
     return "farmland";
   }
+  // protect_class 21–29 are social/cultural protections (historic districts,
+  // heritage sites), not natural areas, so they are not environmental features.
+  const protectClass = Number(tags.protect_class);
+  const culturalProtection = Number.isFinite(protectClass) && protectClass >= 21 && protectClass <= 29;
   if (
-    ["protected_area", "national_park"].includes(tags.boundary ?? "") ||
-    tags.leisure === "nature_reserve" ||
-    tags.protect_class
+    !culturalProtection &&
+    !/historic/i.test(tags.protection_title ?? "") &&
+    (["protected_area", "national_park"].includes(tags.boundary ?? "") ||
+      tags.leisure === "nature_reserve" ||
+      tags.protect_class)
   ) {
     return "protected";
   }
@@ -301,33 +307,103 @@ function normalizeResponse(input: unknown): OSMResponse {
   return { elements };
 }
 
+// Publicly relevant road classes. Service roads are kept, but driveways,
+// parking aisles and drive-throughs are excluded: they dominate the response
+// size and are not useful for a road salt awareness view.
+const ROAD_CLASSES =
+  "motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service";
+const ROAD_CLASS_PATTERN = new RegExp(`^(${ROAD_CLASSES})$`);
+const EXCLUDED_SERVICE = "driveway|parking_aisle|drive-through";
+const EXCLUDED_SERVICE_PATTERN = new RegExp(`^(${EXCLUDED_SERVICE})$`);
+
+/** OSM tags worth showing for a road; everything else is dropped. */
+const ROAD_TAGS_KEPT = [
+  "highway",
+  "name",
+  "ref",
+  "service",
+  "surface",
+  "lanes",
+  "maxspeed",
+  "oneway",
+  "bridge",
+  "tunnel",
+  "lit",
+  "sidewalk",
+] as const;
+
+function pickTags(tags: Record<string, string>, keys: readonly string[]) {
+  const picked: Record<string, string> = {};
+  for (const key of keys) if (tags[key]) picked[key] = tags[key];
+  return picked;
+}
+
+/** Finer mapped type for an environmental feature, e.g. stream or pond. */
+function environmentalSubtype(
+  kind: EnvironmentalKind,
+  tags: Record<string, string>,
+): string | undefined {
+  switch (kind) {
+    case "waterway":
+      return tags.waterway;
+    case "water":
+      return tags.water ?? (tags.waterway === "riverbank" ? "river" : tags.natural);
+    case "wetland":
+      return tags.wetland ?? "wetland";
+    case "farmland":
+      return tags.landuse;
+    case "protected":
+      return tags.leisure ?? tags.boundary;
+  }
+}
+
+const METERS_PER_DEGREE_LATITUDE = 111_320;
+
+/** [south, west, north, east] box extending radiusMeters from the center. */
+export function boundingBox(
+  latitude: number,
+  longitude: number,
+  radiusMeters: number,
+): [number, number, number, number] {
+  const latitudeDelta = radiusMeters / METERS_PER_DEGREE_LATITUDE;
+  const longitudeDelta =
+    radiusMeters /
+    (METERS_PER_DEGREE_LATITUDE * Math.cos((latitude * Math.PI) / 180));
+  return [
+    latitude - latitudeDelta,
+    longitude - longitudeDelta,
+    latitude + latitudeDelta,
+    longitude + longitudeDelta,
+  ];
+}
+
 export function overpassQuery(
   latitude: number,
   longitude: number,
   radiusMeters: number,
 ): string {
-  const around = `(around:${radiusMeters},${latitude},${longitude})`;
+  // A global bounding box ("[bbox:...]") uses Overpass's spatial index
+  // directly and is far cheaper than repeating an `around` circle filter per
+  // statement. The box spans radiusMeters in each direction from the center.
+  const [south, west, north, east] = boundingBox(
+    latitude,
+    longitude,
+    radiusMeters,
+  );
+  const bbox = [south, west, north, east].map((value) => value.toFixed(6));
   const query = [
-    `[out:json][timeout:12];`,
+    `[out:json][timeout:20][bbox:${bbox.join(",")}];`,
     `(`,
-    `way${around}[highway~"^(primary|secondary|tertiary|residential|unclassified|service)$"];`,
-    `way${around}[waterway];`,
-    `way${around}[natural~"^(water|wetland)$"];`,
-    `way${around}[water];`,
-    `way${around}[wetland];`,
-    `way${around}[landuse~"^(farmland|farmyard|orchard|vineyard|plant_nursery)$"];`,
-    `way${around}[boundary~"^(protected_area|national_park)$"];`,
-    `way${around}[leisure=nature_reserve];`,
-    `way${around}[protect_class];`,
-    `relation${around}[waterway];`,
-    `relation${around}[natural~"^(water|wetland)$"];`,
-    `relation${around}[water];`,
-    `relation${around}[wetland];`,
-    `relation${around}[landuse~"^(farmland|farmyard|orchard|vineyard|plant_nursery)$"];`,
-    `relation${around}[boundary~"^(protected_area|national_park)$"];`,
-    `relation${around}[leisure=nature_reserve];`,
-    `relation${around}[protect_class];`,
-    `);out geom;`,
+    `way[highway~"^(${ROAD_CLASSES})$"][service!~"^(${EXCLUDED_SERVICE})$"];`,
+    `wr[waterway];`,
+    `wr[natural~"^(water|wetland)$"];`,
+    `wr[water];`,
+    `wr[wetland];`,
+    `wr[landuse~"^(farmland|farmyard|orchard|vineyard|plant_nursery)$"];`,
+    `wr[boundary~"^(protected_area|national_park)$"];`,
+    `wr[leisure=nature_reserve];`,
+    `wr[protect_class];`,
+    `);out geom qt;`,
   ].join("");
   return query;
 }
@@ -335,7 +411,9 @@ export function overpassQuery(
 export function overpassToGeoJSON(
   input: unknown,
   updatedAt = new Date().toISOString(),
+  radiusMeters = SEARCH_RADIUS_METERS,
 ): MapData {
+  const seen = new Set<string>();
   const response = normalizeResponse(input);
   const roads: Feature<Geometry, RoadProperties>[] = [];
   const environmentalFeatures: Feature<
@@ -344,14 +422,18 @@ export function overpassToGeoJSON(
   >[] = [];
 
   for (const element of response.elements) {
+    // Overpass can return the same element from several union statements.
+    const elementKey = `${element.type}/${element.id}`;
+    if (seen.has(elementKey)) continue;
+    seen.add(elementKey);
+
     const tags = parseTags(element.tags);
     const roadClass = tags.highway;
     if (
       element.type === "way" &&
       roadClass &&
-      /^(primary|secondary|tertiary|residential|unclassified|service)$/.test(
-        roadClass,
-      )
+      ROAD_CLASS_PATTERN.test(roadClass) &&
+      !(roadClass === "service" && EXCLUDED_SERVICE_PATTERN.test(tags.service ?? ""))
     ) {
       const geometry = featureGeometry(element, null);
       if (!geometry || (geometry.type !== "LineString" && geometry.type !== "MultiLineString")) {
@@ -359,9 +441,12 @@ export function overpassToGeoJSON(
       }
       const properties: RoadProperties = {
         roadId: `way/${element.id}`,
+        osmId: element.id,
         classification: roadClass,
+        tags: pickTags(tags, ROAD_TAGS_KEPT),
       };
       if (tags.name) properties.name = tags.name;
+      if (tags.ref) properties.ref = tags.ref;
       roads.push({
         type: "Feature",
         id: properties.roadId,
@@ -377,9 +462,12 @@ export function overpassToGeoJSON(
     if (!geometry) continue;
     const properties: EnvironmentalProperties = {
       featureId: `${element.type}/${element.id}`,
+      osmId: element.id,
       kind,
     };
     if (tags.name) properties.name = tags.name;
+    const subtype = environmentalSubtype(kind, tags);
+    if (subtype) properties.subtype = subtype;
     environmentalFeatures.push({
       type: "Feature",
       id: properties.featureId,
@@ -402,6 +490,6 @@ export function overpassToGeoJSON(
     environmentalFeatures: environmentCollection,
     updatedAt,
     source: "OpenStreetMap Overpass API",
-    radiusMeters: SEARCH_RADIUS_METERS,
+    radiusMeters,
   };
 }
