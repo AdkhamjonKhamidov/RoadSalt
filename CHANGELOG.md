@@ -1,5 +1,89 @@
 # Changelog
 
+## 2026-11-07 — Road conditions view (default), light theme default
+
+### What changed
+- **New default view, "Road conditions":** roads are coloured `#B7D894` (no reported problems), `#F1A344` (use caution) or `#E00000` (closed), or gray when no condition data is available. Closures and hazards are drawn along the affected stretch with a white outline, and clicking one shows what, where and until when.
+- **Status banner above the map:** one plain sentence on what is going on, for example "Use caution on all roads — Winter Storm Warning in effect", "1 closure and 2 hazards reported nearby", "No closures or hazards reported nearby", or "Closure and hazard reports are not connected".
+- **Road details:** a "Current condition" card for the selected road, with the reason (the closure or hazard on that road, or the area-wide cause).
+- **Live closures and hazards** come from the TomTom Traffic Incidents API through `/api/incidents`, with a server-only `TOMTOM_API_KEY`. Without a key, the route reports "not configured" and roads are never coloured green.
+- **Area-wide caution** comes from NWS winter road alerts or forecast freezing precipitation. Freeze Warnings and Frost Advisories (crop alerts), wind chill and cold alerts are excluded after a live check showed they would wrongly flag every road.
+- **Light basemap is the default**; dark is one click away. In the conditions view on the light map, roads get a darker outline so the pale green stays readable.
+
+### Why it changed
+- The user asked for a visual product where it's easy to see what is happening on the roads, with green, orange and red condition colours and a light default.
+
+### Files created or modified
+- Created: `app/lib/road-conditions.ts`, `app/lib/traffic-incidents.ts`, `app/api/incidents/route.ts`, `tests/road-conditions.test.ts`.
+- Modified:
+  - `app/components/MapCanvas.tsx`, `app/components/RoadSaltDashboard.tsx`
+  - `app/lib/data-types.ts`, `app/lib/demo-config.ts`, `app/lib/proximity.ts` (exports `minimumDistance`)
+  - `app/globals.css`
+  - `CLAUDE.md`, `programmer.md`, `docs/DATA_SOURCES.md`, `PROJECT_HANDOVER.md`, and this changelog
+
+### API or data-source changes
+- New: TomTom Traffic Incidents API v5 (needs `TOMTOM_API_KEY`).
+
+### Tests and checks
+- `npm run lint`, `npx tsc --noEmit`, `npm test` (38/38) and `npm run build` passed.
+- Browser: the light theme and conditions view are the defaults. With no key, the banner reads "Closure and hazard reports are not connected", and roads are gray with outlines.
+- Not verified: a live TomTom response (no key yet), and the orange and red colours on real data (no winter road alert or closure source was active during testing).
+
+## 2026-11-07 — Nationwide road map styled after county snow-route maps
+
+### What changed
+- **Look and feel** (using the St. Mary's County MD Public Snow Removal Map as a visual guide):
+  - A dark basemap (MapTiler `dataviz-dark`) is now the default, with a Dark/Light switch.
+  - Roads are bold, with casings, and wider for major classes.
+  - Roads use only three contrasting accents (red-orange, amber, teal) plus white or navy for local roads; the interface palette is unchanged.
+- **"Color roads by":**
+  - Road type: amber for highways and primary roads, teal for secondary and tertiary, white or navy for local roads.
+  - Nearby water, wetland and farmland: computed for every loaded road by `roadSensitivityLevels()`.
+  - Agency plow status, where a feed exists.
+- **Local reporting:**
+  - NWS Local Storm Reports (last 72 h, within about 50 mi; US-wide) through `/api/storm-reports`, listed in a "Local reports" panel and shown as map points.
+  - NWS alerts in the same panel.
+  - A registry of verified agency plow-status feeds (`app/lib/plow-feeds.ts`, starting with St. Mary's County) through `/api/plow-status`. Status older than 48 h is drawn gray and labelled outdated.
+- **Forests:** a new environmental feature type (tiles `landcover` wood/forest; OSM `natural=wood` and `landuse=forest`). Forests are listed but don't set the sensitivity level.
+- **Units:** °F is the default, with a °F/°C switch remembered per browser. Wind is in mph, precipitation in inches and distances in ft/mi, or metric when °C is chosen (`app/lib/units.ts`).
+- **Mobile:**
+  - The map takes 62 % of the screen height, and the map key starts collapsed.
+  - Report, conditions and forecast panels collapse to one-line summaries.
+  - Road tags and long remarks are hidden, and the toolbar is smaller.
+- **NWS refactor:** a shared server helper (`app/lib/nws-server.ts`) handles the cached point lookup of forecast office and nearest station. The observation "older than 2 hours" flag is now computed on the server.
+
+### Why it changed
+- The user asked for a snow-route-style map that works anywhere in the US: clearer roads, local reporting, farmland and other features, °F by default and a simpler mobile view.
+- No national plow-status dataset exists, so the app colors roads by data that exists nationwide and adds agency plow status only where an agency publishes it.
+
+### Files created or modified
+- Created:
+  - `app/lib/units.ts`, `app/lib/storm-reports.ts`, `app/lib/plow-feeds.ts`, `app/lib/nws-server.ts`
+  - `app/api/storm-reports/route.ts`, `app/api/plow-status/route.ts`
+  - `tests/local-reporting.test.ts`
+- Modified:
+  - `app/components/MapCanvas.tsx` (rewritten), `app/components/RoadSaltDashboard.tsx` (rewritten)
+  - `app/lib/data-types.ts`, `app/lib/demo-config.ts`, `app/lib/geojson.ts`, `app/lib/tile-features.ts`, `app/lib/proximity.ts`, `app/lib/nws.ts`
+  - `app/api/observations/route.ts`, `app/globals.css`
+  - `CLAUDE.md`, `programmer.md`, `docs/DATA_SOURCES.md`, `PROJECT_HANDOVER.md`, and this changelog
+
+### API or data-source changes
+- New: the Iowa Environmental Mesonet LSR GeoJSON endpoint and the St. Mary's County ArcGIS FeatureServer.
+- New: MapTiler `dataviz-dark` style.
+- Overpass now also requests `natural=wood` and `landuse=forest`.
+
+### Tests and checks
+- `npm run lint`, `npx tsc --noEmit`, `npm test` (32/32) and `npm run build` passed.
+- Routes, live:
+  - Storm reports: Salisbury (AKQ, 0 reports), Minneapolis (MPX, 0) and Martinsdale, MT (BYZ, 4 real reports). London → 404 message.
+  - Plow status: Leonardtown → St. Mary's feed (572 segments); Salisbury → none.
+  - Observations: St. Mary's → K2W6 St Marys County Airport.
+- Browser:
+  - The dark map shows bold amber, teal and white roads in Salisbury, and °F is the default (51 °F; the °C switch shows 10 °C and is remembered).
+  - In Leonardtown, the plow-status option is enabled and the county routes show gray as outdated (last county update March 2, 2026).
+  - At 375 px there's no horizontal scroll, the map key and panels start collapsed, and the map dominates the screen.
+- Not verified: an active winter storm (no winter reports or fresh plow status existed during testing) and a successful Overpass load.
+
 ## 2026-11-07 — Location search, location-scoped real data, parsing layer, tests
 
 ### What changed

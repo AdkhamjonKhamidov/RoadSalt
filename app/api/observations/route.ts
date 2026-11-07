@@ -1,12 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import type { ObservationData } from "../../lib/data-types";
-import {
-  NWS_BASE,
-  parseAlerts,
-  parseNearestStation,
-  parseObservation,
-  parsePointStationsUrl,
-} from "../../lib/nws";
+import { NWS_BASE, parseAlerts, parseObservation } from "../../lib/nws";
+import { NwsError, nwsJson, nwsPlace } from "../../lib/nws-server";
 import {
   coordinateKey,
   coordinatesFromSearchParams,
@@ -16,94 +11,44 @@ import {
 // GET /api/observations?lat=..&lon=.. → measured conditions from the nearest
 // NWS station plus active alerts for the point. US locations only.
 
-const NWS_HEADERS = {
-  "User-Agent": "RoadSalt/0.1 (road salt awareness demo)",
-  Accept: "application/geo+json",
-};
-const REQUEST_TIMEOUT_MS = 10_000;
-const stationCache = new ExpiringCache<{ id: string; name: string | null }>(200, 24 * 60 * 60 * 1000);
+const OBSERVATION_STALE_MS = 2 * 60 * 60 * 1000;
 const dataCache = new ExpiringCache<ObservationData>(200, 5 * 60 * 1000);
 const pending = new Map<string, Promise<ObservationData>>();
-
-class NwsError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
-  }
-}
-
-async function getJson(url: string): Promise<unknown> {
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      headers: NWS_HEADERS,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      cache: "no-store",
-    });
-  } catch (error) {
-    throw new NwsError(
-      error instanceof Error && error.name === "TimeoutError"
-        ? "National Weather Service request timed out."
-        : "Could not reach the National Weather Service.",
-      503,
-    );
-  }
-  if (response.status === 404) {
-    throw new NwsError(
-      "National Weather Service data is only available for United States locations.",
-      404,
-    );
-  }
-  if (!response.ok) {
-    throw new NwsError(`National Weather Service returned HTTP ${response.status}.`, 502);
-  }
-  return response.json();
-}
-
-async function nearestStation(latitude: number, longitude: number) {
-  const key = coordinateKey(latitude, longitude);
-  const hit = stationCache.get(key);
-  if (hit) return hit;
-  const point = await getJson(`${NWS_BASE}/points/${latitude.toFixed(4)},${longitude.toFixed(4)}`);
-  const station = parseNearestStation(await getJson(parsePointStationsUrl(point)));
-  stationCache.set(key, station);
-  return station;
-}
 
 async function fetchObservations(latitude: number, longitude: number): Promise<ObservationData> {
   const reason = (result: PromiseRejectedResult) =>
     result.reason instanceof Error ? result.reason.message : "Unavailable.";
-  const [stationResult, alertsResult] = await Promise.allSettled([
-    nearestStation(latitude, longitude),
-    getJson(`${NWS_BASE}/alerts/active?point=${latitude.toFixed(4)},${longitude.toFixed(4)}`).then(parseAlerts),
+  const [placeResult, alertsResult] = await Promise.allSettled([
+    nwsPlace(latitude, longitude),
+    nwsJson(`${NWS_BASE}/alerts/active?point=${latitude.toFixed(4)},${longitude.toFixed(4)}`).then(parseAlerts),
   ]);
-  if (stationResult.status === "rejected" && alertsResult.status === "rejected") {
-    throw stationResult.reason instanceof NwsError
-      ? stationResult.reason
+  if (placeResult.status === "rejected" && alertsResult.status === "rejected") {
+    throw placeResult.reason instanceof NwsError
+      ? placeResult.reason
       : new NwsError("National Weather Service data is unavailable.", 503);
   }
 
   let observation: ObservationData["observation"] = null;
   let observationError: string | null = null;
-  if (stationResult.status === "fulfilled") {
+  if (placeResult.status === "fulfilled") {
     try {
       observation = parseObservation(
-        await getJson(`${NWS_BASE}/stations/${stationResult.value.id}/observations/latest`),
+        await nwsJson(`${NWS_BASE}/stations/${placeResult.value.station.id}/observations/latest`),
       );
     } catch (error) {
       observationError = error instanceof Error ? error.message : "Unavailable.";
     }
   } else {
-    observationError = reason(stationResult);
+    observationError = reason(placeResult);
   }
 
   return {
-    stationId: stationResult.status === "fulfilled" ? stationResult.value.id : null,
-    stationName: stationResult.status === "fulfilled" ? stationResult.value.name : null,
+    stationId: placeResult.status === "fulfilled" ? placeResult.value.station.id : null,
+    stationName: placeResult.status === "fulfilled" ? placeResult.value.station.name : null,
     observation,
     observationError,
+    observationStale:
+      observation !== null && Date.now() - Date.parse(observation.timestamp) > OBSERVATION_STALE_MS,
     alerts: alertsResult.status === "fulfilled" ? alertsResult.value : null,
     alertsError: alertsResult.status === "rejected" ? reason(alertsResult) : null,
     updatedAt: new Date().toISOString(),

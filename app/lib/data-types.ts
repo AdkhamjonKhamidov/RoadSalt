@@ -22,6 +22,7 @@ export type EnvironmentalKind =
   | "water"
   | "wetland"
   | "farmland"
+  | "forest"
   | "protected";
 
 export const ENVIRONMENTAL_KIND_LABELS: Record<EnvironmentalKind, string> = {
@@ -29,6 +30,7 @@ export const ENVIRONMENTAL_KIND_LABELS: Record<EnvironmentalKind, string> = {
   water: "Water bodies",
   wetland: "Wetlands",
   farmland: "Farmland",
+  forest: "Forests & woods",
   protected: "Protected areas",
 };
 
@@ -134,9 +136,65 @@ export type ObservationData = {
   stationName: string | null;
   observation: NwsObservation | null;
   observationError: string | null;
+  /** True when the latest observation is more than 2 hours old (server time). */
+  observationStale: boolean;
   /** null when the alerts request failed (distinct from "no active alerts"). */
   alerts: NwsAlert[] | null;
   alertsError: string | null;
   updatedAt: string;
   source: "National Weather Service";
+};
+
+/** One NWS Local Storm Report near the selected location. */
+export type StormReport = {
+  id: string;
+  /** IEM/NWS report type, e.g. "SNOW", "FREEZING RAIN", "TSTM WND GST". */
+  type: string;
+  /** True for snow, ice, freezing precipitation and cold reports. */
+  winter: boolean;
+  magnitude: number | null;
+  unit: string | null;
+  location: string;
+  /** ISO time of the observation. */
+  time: string;
+  remark: string | null;
+  /** Who reported it, e.g. "Trained Spotter", "Public", "Mesonet". */
+  source: string | null;
+  /** Issuing NWS forecast office. */
+  office: string | null;
+  latitude: number;
+  longitude: number;
+  distanceKm: number;
+};
+
+export type StormReportData = {
+  office: string;
+  windowHours: number;
+  radiusKm: number;
+  reports: StormReport[];
+  updatedAt: string;
+  source: "NWS Local Storm Reports (via Iowa Environmental Mesonet)";
+};
+
+/** A live traffic incident (closure or hazard) from TomTom. */
+export type TrafficIncident = {
+  id: string;
+  condition: "closed" | "caution";
+  /** e.g. "Road closed", "Accident", "Ice", "Road works". */
+  type: string;
+  description: string;
+  from: string | null;
+  to: string | null;
+  roads: string[];
+  start: string | null;
+  end: string | null;
+  geometry: Geometry;
+};
+
+export type IncidentData = {
+  /** False when no TOMTOM_API_KEY is configured on the server. */
+  configured: boolean;
+  incidents: TrafficIncident[];
+  updatedAt: string;
+  source: "TomTom Traffic";
 };

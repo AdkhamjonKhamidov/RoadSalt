@@ -35,7 +35,11 @@ Data services and parsing (`app/lib/`, framework-free):
 - `tile-features.ts` — roads and features read from the loaded basemap vector tiles.
 - `open-meteo.ts` — Open-Meteo URL and parser (optional values stay null).
 - `nws.ts` — NWS station, observation and alert parsers.
-- `proximity.ts` — approximate road-to-feature distance and sensitivity level.
+- `proximity.ts` — approximate road-to-feature distance and sensitivity level; `roadSensitivityLevels()` colours all roads at once (bounding-box prefiltered; forests don't set the level).
+- `storm-reports.ts` — NWS Local Storm Report URL, parser and distance filter.
+- `plow-feeds.ts` — registry of verified agency plow-status feeds, status categories, parser and staleness.
+- `nws-server.ts` — server-only NWS fetch helper and cached point lookup (forecast office and nearest station).
+- `units.ts` — °F/°C and US/metric display conversion (data stays metric internally).
 - `weather.ts` — weather code labels, precipitation wording, attention rule.
 - `demo-config.ts` — default location, zoom, Overpass radius (2 km), thresholds, basemap selection.
 
@@ -44,6 +48,8 @@ API routes (server):
 - `app/api/weather/route.ts` — `GET /api/weather?lat&lon`, Open-Meteo with a 10-minute per-point cache.
 - `app/api/observations/route.ts` — `GET /api/observations?lat&lon`, NWS nearest station plus alerts (US only).
 - `app/api/map-data/route.ts` — `GET /api/map-data?lat&lon`, server-side Overpass alternative (not used by the UI).
+- `app/api/storm-reports/route.ts` — `GET /api/storm-reports?lat&lon`, NWS Local Storm Reports (72 h, 80 km).
+- `app/api/plow-status/route.ts` — `GET /api/plow-status?lat&lon`, registered agency plow feeds covering the point.
 
 Tests: `tests/*.test.ts` (Node's built-in test runner; `tests/register.mjs` resolves extensionless imports).
 
@@ -66,6 +72,16 @@ npm run build
 
 `npm test` needs Node 22.18 or newer (built-in TypeScript type stripping). It uses no extra packages. Tests use small synthetic fixtures shaped like real provider responses; these never reach the UI.
 
+## Adding a local plow-status feed
+
+1. Find the agency's public map. ArcGIS "Instant App" and web map pages expose their configuration at `https://www.arcgis.com/sharing/rest/content/items/<appid>/data?f=json`, and the web map's `operationalLayers[].url` is the FeatureServer layer.
+2. Open `<layer>?f=json` and note the polyline fields: segment name, status, last-edit date (often `EditDate`) and optionally route, area and miles. Check the status domain values.
+3. Get the extent: `<layer>/query?where=1=1&returnExtentOnly=true&outSR=4326&f=json`.
+4. Add an entry to `PLOW_FEEDS` in `app/lib/plow-feeds.ts` with the agency name, layer URL, public map URL, extent and field mapping. If the agency's status words aren't recognized by `categorizePlowStatus`, extend it and add a test.
+5. Run `npm test`, then search a place inside the extent and choose "Agency plow status".
+
+Only add feeds from official agency sources, and keep their attribution.
+
 ## Testing location search and roads by hand
 
 1. Run `npm run dev` and open the app. It starts at 1101 Camden Ave, Salisbury, MD. Roads appear within a few seconds, and the status line shows "OSM map tiles".
@@ -74,6 +90,10 @@ npm run build
 4. Click a road line (navy). The panel shows its OSM attributes, nearby mapped features and local weather. With Overpass detail loaded, it also shows the OSM way ID (linked), tags, and unnamed or service roads.
 5. If "Detailed OSM data unavailable" appears, public Overpass servers are busy. The tile data stays usable; press Retry later.
 6. A location outside the US (for example `London`) shows weather from Open-Meteo, and NWS reports that it covers US locations only.
+7. The default view is **Road conditions**. Green means no reported problems, orange means use caution, red means closed, and gray means no condition data. The banner above the map says what is going on and why. Closures need `TOMTOM_API_KEY`.
+8. Use "Color roads by" to switch between road type and nearby water, wetland and farmland (red ≤ 50 m, amber ≤ 250 m, teal farther). Search `Leonardtown, MD` and choose "Agency plow status" to see St. Mary's County routes (gray when the county's status is outdated).
+9. Use °F/°C in the header; the choice is remembered in this browser. Use Dark/Light to switch the basemap.
+10. On a phone-width window, the map key and the report, conditions and forecast panels start collapsed.
 
 ## Environment configuration
 
@@ -82,6 +102,7 @@ All variables are optional. With none set, the app runs on keyless public servic
 | Variable | Purpose | Blank behavior |
 |---|---|---|
 | `NEXT_PUBLIC_MAPTILER_API_KEY` | MapTiler key for the basemap. It is browser-visible by design, so restrict it to your domains in the MapTiler dashboard. | Uses the CARTO Positron basemap. |
+| `TOMTOM_API_KEY` | **Server-only** key for live road closures and hazards (TomTom Traffic Incidents). Create a free key at developer.tomtom.com. Never prefix it with `NEXT_PUBLIC_`. | Closure/hazard colours off; the banner says "not connected" and roads show weather caution only. |
 | `NEXT_PUBLIC_MAPTILER_STYLE_ID` | MapTiler map ID, such as `positron`, `dataviz` or `streets-v2`. Used only when a key is set. | `positron` |
 
 The style selection lives in `app/lib/demo-config.ts` (`BASEMAP_PROVIDER`, `BASEMAP_STYLE_URL`). A key or style ID containing characters other than letters, digits, `_` and `-` is ignored, and the CARTO style is used. If MapTiler rejects the key, for example because it's invalid or the domain isn't allowed, the map shows a basemap error that names the variable. Overpass and Open-Meteo need no keys.

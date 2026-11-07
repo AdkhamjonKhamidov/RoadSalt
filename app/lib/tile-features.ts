@@ -98,6 +98,7 @@ function classifyEnvironment(
     case "landcover":
       if (className === "wetland") return "wetland";
       if (className === "farmland") return "farmland";
+      if (className === "wood" || className === "forest") return "forest";
       return null;
     case "park":
       return className && PROTECTED_PARK_CLASSES.has(className) ? "protected" : null;

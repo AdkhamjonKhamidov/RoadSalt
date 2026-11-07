@@ -24,7 +24,7 @@ Demo location: **1101 Camden Ave, Salisbury, MD 21801** (cached coordinates in `
   - `app/components/MapCanvas.tsx`: client component. It owns the MapLibre instance, sources/layers, selection and cleanup. `map-config.ts` re-exports config.
   - `app/lib/`: framework-free logic and types (`demo-config`, `data-types`, `geojson`, `proximity`, `weather`).
   - `app/lib/`: `validation` (guards, cache), `geocoding` (Photon), `geojson` (Overpass query and normalizer), `overpass` (parallel instances, backoff, 25 s deadline, per-location tab cache), `tile-features` (roads and features from basemap tiles), `open-meteo`, `nws`, `proximity`, `weather`, `data-types`, `demo-config`.
-  - Routes: `/api/geocode` (Photon), `/api/weather?lat&lon` (Open-Meteo), `/api/observations?lat&lon` (NWS) and `/api/map-data?lat&lon` (server Overpass, not used by the UI).
+  - Routes: `/api/geocode` (Photon), `/api/weather?lat&lon` (Open-Meteo), `/api/observations?lat&lon` (NWS) `/api/incidents?lat&lon` (TomTom closures and hazards; server-only `TOMTOM_API_KEY`), `/api/storm-reports?lat&lon` (NWS Local Storm Reports via IEM), `/api/plow-status?lat&lon` (registered agency plow feeds, `app/lib/plow-feeds.ts`) and `/api/map-data?lat&lon` (server Overpass, not used by the UI).
   - `app/api/weather/route.ts` (Open-Meteo): server route handler. `app/api/map-data/route.ts` (Overpass) is a kept server alternative that the UI does not currently call.
 - **State:** local React state only. No global store, context or data-fetching library. Keep it that way unless the handover records an approved change.
 - **API pattern:** weather goes through the same-origin `/api/weather` route. OSM map data is requested **directly from the browser** via `loadMapDataInBrowser()`. The user approved this on 2026-11-07, because public Overpass instances accept CORS and the server-side path kept timing out. Any new provider goes through a server route unless the user approves otherwise. Each route calls the provider server-side with `AbortSignal.timeout`, validates the untrusted JSON field by field, shares in-flight requests (`pending`), caches only *successful* results in process memory, and returns `{ error }` with a meaningful status (429/502/503/504) and `Cache-Control: no-store` on failure.
@@ -35,6 +35,9 @@ Demo location: **1101 Camden Ave, Salisbury, MD 21801** (cached coordinates in `
 ## Design rules
 
 - Palette: navy `#112D4E`, blue `#3F72AF`, pale blue `#DBE2EF`, off-white `#F9F7F7` (CSS variables in `app/globals.css`). Typography: **Georgia** only.
+- Map: **light basemap by default**, dark optional. The default road view is **Road conditions**: `#B7D894` no reported problems, `#F1A344` use caution, `#E00000` closed, gray no data (`CONDITION_COLORS` in `app/lib/road-conditions.ts`). Other views use `ROAD_COLORS` in `MapCanvas.tsx` (red-orange, amber, teal, plus white or navy and palette blue). Keep the colour set small.
+- Road condition colours must come from named data (TomTom incidents, NWS winter road alerts, Open-Meteo freezing-precipitation forecast). Never label a road "safe"; green is "No reported problems". Never colour roads green when incident data is not loaded.
+- Units: US customary by default (°F, mph, in, ft/mi) with a °F/°C switch; keep data metric internally and convert only for display (`app/lib/units.ts`).
 - Traditional, authoritative, clean, restrained: subtle solid borders, minimal panels, clear labels, cautious wording. No gradients, no dashboard sprawl, no novelty styling.
 - Keep the map central and dominant on all viewports. Reuse existing components and CSS classes before adding new ones. Do not redesign.
 - Prioritize usability: visible loading, empty and error states, keyboard access, readable contrast.
@@ -67,7 +70,7 @@ Never recommend salt application rates.
 
 ## Scope protection
 
-Do **not** add salt optimization, application-rate advice, inventory management, crew scheduling, authentication, AI chat, machine learning, large analytics dashboards, databases or extra backend infrastructure. Do not add elevation/terrain work or the "road risk highlighting" milestone unless the user explicitly requests it. Any expansion of scope needs explicit user approval.
+Do **not** add salt optimization, application-rate advice, inventory management, crew scheduling, authentication, AI chat, machine learning, large analytics dashboards, databases or extra backend infrastructure. Do not add elevation/terrain work or the "road risk highlighting" milestone unless the user explicitly requests it. Plow or treatment status may only come from a registered official agency feed; never infer it, and show stale status (> 48 h) as outdated. Any expansion of scope needs explicit user approval.
 
 Do not overwrite or revert `public/assets/favicon.png`. It is the user's own image.
 

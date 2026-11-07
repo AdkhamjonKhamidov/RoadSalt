@@ -150,7 +150,7 @@ select {
 }
 
 .map-legend {
-  min-width: 13.5rem;
+  min-width: 0;
   padding: 0.55rem 0.7rem;
 }
 
@@ -482,4 +482,205 @@ select {
   border-top: 1px solid var(--pale-blue);
   font-size: 0.65rem;
   color: #53677d;
+}
+
+/* Map frame: tall on desktop, most of the screen on phones */
+.map-frame {
+  height: 600px;
+}
+
+@media (max-width: 640px) {
+  .map-frame {
+    height: 62vh;
+    min-height: 360px;
+  }
+}
+
+/* Segmented toggles (°F/°C, map style) */
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--navy);
+}
+
+.segmented-option {
+  border: 0;
+  background: var(--off-white);
+  color: var(--navy);
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+}
+
+.segmented-option + .segmented-option {
+  border-left: 1px solid var(--navy);
+}
+
+.segmented-option-active {
+  background: var(--navy);
+  color: var(--off-white);
+}
+
+.segmented-option:focus-visible,
+.map-select:focus-visible,
+.map-legend-toggle:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+
+.map-select {
+  border: 1px solid var(--navy);
+  background: #ffffff;
+  color: var(--navy);
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.4rem;
+  max-width: 15rem;
+}
+
+/* Collapsible panel sections */
+.panel-section {
+  border-bottom: 1px solid var(--pale-blue);
+  padding-bottom: 0.75rem;
+}
+
+.panel-section > summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  cursor: pointer;
+  list-style: none;
+  padding: 0.25rem 0;
+}
+
+.panel-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+.panel-section > summary::after {
+  content: "+";
+  color: var(--blue);
+}
+
+.panel-section[open] > summary::after {
+  content: "−";
+}
+
+.panel-summary {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: #53677d;
+}
+
+.panel-body {
+  margin-top: 0.5rem;
+}
+
+.report {
+  border-left: 3px solid var(--pale-blue);
+  padding-left: 0.5rem;
+}
+
+.report-winter {
+  border-left-color: var(--blue);
+}
+
+/* Map key: collapsible, swatches drawn from road colours */
+.map-legend-toggle {
+  border: 0;
+  background: transparent;
+  color: var(--navy);
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0;
+  cursor: pointer;
+}
+
+.map-legend-swatch {
+  display: inline-block;
+  flex: none;
+}
+
+.map-legend-swatch-line {
+  width: 1.4rem;
+  height: 0.3rem;
+  border-radius: 2px;
+}
+
+.map-legend-swatch-dot {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 0 1px rgba(17, 45, 78, 0.35);
+}
+
+.map-legend-swatch-fill {
+  width: 1rem;
+  height: 0.7rem;
+  border: 1px solid rgba(17, 45, 78, 0.25);
+}
+
+@media (max-width: 640px) {
+  .map-toolbar-button {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.72rem;
+  }
+
+  .maplibregl-ctrl-attrib {
+    font-size: 0.6rem;
+  }
+}
+
+/* Road condition status: one glanceable line above the map */
+.condition-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  border-left: 6px solid #9aa3ad;
+  border-bottom: 1px solid rgba(17, 45, 78, 0.15);
+  background: #ffffff;
+}
+
+.condition-dot {
+  display: inline-block;
+  flex: none;
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px #ffffff, 0 0 0 3px rgba(17, 45, 78, 0.35);
+}
+
+.condition-headline {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.condition-detail {
+  margin: 0.1rem 0 0;
+  font-size: 0.75rem;
+  color: #53677d;
+}
+
+.condition-card {
+  border-left: 5px solid #9aa3ad;
+  background: #ffffff;
+  padding: 0.6rem 0.75rem;
+}
+
+@media (max-width: 640px) {
+  .condition-banner {
+    padding: 0.5rem 0.75rem;
+  }
+
+  .condition-headline {
+    font-size: 0.88rem;
+  }
 }

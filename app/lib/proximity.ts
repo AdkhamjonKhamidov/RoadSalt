@@ -194,7 +194,8 @@ function insidePolygon(point: Position, polygon: Position[][]): boolean {
   );
 }
 
-function minimumDistance(
+/** Approximate minimum distance in metres between two geometries (0 when they touch). */
+export function minimumDistance(
   road: Geometry,
   environment: Geometry,
 ): number | null {
@@ -281,6 +282,8 @@ function minimumDistance(
   return Number.isFinite(nearest) ? nearest : null;
 }
 
+const LEVEL_EXCLUDED_KINDS = new Set<EnvironmentalProperties["kind"]>(["forest"]);
+
 export function assessEnvironmentalSensitivity(
   road: RoadFeature,
   features: EnvironmentFeature[],
@@ -301,8 +304,19 @@ export function assessEnvironmentalSensitivity(
     )
     .sort((a, b) => a.distanceMeters - b.distanceMeters);
 
-  const nearest = distances[0];
+  // Forests are listed as nearby features but do not set the sensitivity
+  // level: woods line most rural roads and would make nearly every road
+  // "High", hiding the water, wetland and farmland signal.
+  const nearest = distances.find(
+    (entry) => !LEVEL_EXCLUDED_KINDS.has(entry.feature.kind),
+  );
   if (!nearest) {
+    const nearbyOnly = distances.filter(
+      (item) => item.distanceMeters <= ENVIRONMENTAL_THRESHOLDS_METERS.moderate,
+    );
+    if (nearbyOnly.length > 0) {
+      return { level: "Low", nearestDistanceMeters: null, nearbyFeatures: nearbyOnly };
+    }
     return {
       level: "Unknown",
       nearestDistanceMeters: null,
@@ -325,4 +339,91 @@ export function assessEnvironmentalSensitivity(
         item.distanceMeters <= ENVIRONMENTAL_THRESHOLDS_METERS.moderate,
     ),
   };
+}
+
+export type SensitivityLevel = EnvironmentalAssessment["level"];
+
+type Bounds = [number, number, number, number];
+
+function geometryBounds(geometry: Geometry): Bounds | null {
+  let west = Infinity, south = Infinity, east = -Infinity, north = -Infinity;
+  const visit = (value: unknown): void => {
+    if (!Array.isArray(value)) return;
+    if (typeof value[0] === "number" && typeof value[1] === "number") {
+      west = Math.min(west, value[0]);
+      east = Math.max(east, value[0]);
+      south = Math.min(south, value[1]);
+      north = Math.max(north, value[1]);
+      return;
+    }
+    value.forEach(visit);
+  };
+  if ("coordinates" in geometry) visit(geometry.coordinates);
+  return Number.isFinite(west) ? [west, south, east, north] : null;
+}
+
+/** Splits multi-geometries so each part gets its own (tight) bounding box. */
+function geometryParts(geometry: Geometry): Geometry[] {
+  switch (geometry.type) {
+    case "MultiPolygon":
+      return geometry.coordinates.map((coordinates) => ({ type: "Polygon", coordinates }));
+    case "MultiLineString":
+      return geometry.coordinates.map((coordinates) => ({ type: "LineString", coordinates }));
+    default:
+      return [geometry];
+  }
+}
+
+/**
+ * Sensitivity level for many roads at once (for colouring the map).
+ * Same rules as assessEnvironmentalSensitivity (forests excluded from the
+ * level), but each feature part is bounding-box filtered first so only parts
+ * within the moderate threshold are measured.
+ */
+export function roadSensitivityLevels(
+  roads: RoadFeature[],
+  features: EnvironmentFeature[],
+): Map<string, SensitivityLevel> {
+  const levels = new Map<string, SensitivityLevel>();
+  const parts = features
+    .filter((feature) => !LEVEL_EXCLUDED_KINDS.has(feature.properties.kind))
+    .flatMap((feature) => geometryParts(feature.geometry))
+    .map((geometry) => ({ geometry, bounds: geometryBounds(geometry) }))
+    .filter((part): part is { geometry: Geometry; bounds: Bounds } => part.bounds !== null);
+
+  for (const road of roads) {
+    const roadBounds = geometryBounds(road.geometry);
+    if (!roadBounds) continue;
+    if (parts.length === 0) {
+      levels.set(road.properties.roadId, "Unknown");
+      continue;
+    }
+    // Expand by the moderate threshold (degrees; longitude scaled by latitude).
+    const latitude = (roadBounds[1] + roadBounds[3]) / 2;
+    const marginLat = ENVIRONMENTAL_THRESHOLDS_METERS.moderate / 111_320;
+    const marginLon = marginLat / Math.max(0.2, Math.cos((latitude * Math.PI) / 180));
+    const [west, south, east, north] = [
+      roadBounds[0] - marginLon,
+      roadBounds[1] - marginLat,
+      roadBounds[2] + marginLon,
+      roadBounds[3] + marginLat,
+    ];
+    let nearest = Infinity;
+    for (const part of parts) {
+      const [pw, ps, pe, pn] = part.bounds;
+      if (pe < west || pw > east || pn < south || ps > north) continue;
+      const distance = minimumDistance(road.geometry, part.geometry);
+      if (distance !== null && distance < nearest) nearest = distance;
+      if (nearest <= ENVIRONMENTAL_THRESHOLDS_METERS.high) break;
+    }
+    levels.set(
+      road.properties.roadId,
+      nearest <= ENVIRONMENTAL_THRESHOLDS_METERS.high
+        ? "High"
+        : nearest <= ENVIRONMENTAL_THRESHOLDS_METERS.moderate
+          ? "Moderate"
+          : "Low",
+    );
+  }
+  return levels;
 }

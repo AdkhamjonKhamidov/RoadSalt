@@ -12,15 +12,15 @@ function quantity(value: unknown): number | null {
   return isRecord(value) ? finiteNumber(value.value) : null;
 }
 
-/** /points response → URL of the nearby observation-station list. */
-export function parsePointStationsUrl(input: unknown): string {
-  const url = isRecord(input) && isRecord(input.properties)
-    ? text(input.properties.observationStations, 300)
-    : null;
-  if (!url || !url.startsWith(`${NWS_BASE}/`)) {
+/** /points response → forecast office (e.g. "AKQ") and station-list URL. */
+export function parsePointInfo(input: unknown): { office: string; stationsUrl: string } {
+  const properties = isRecord(input) && isRecord(input.properties) ? input.properties : null;
+  const stationsUrl = properties ? text(properties.observationStations, 300) : null;
+  const office = properties ? text(properties.cwa, 6) ?? text(properties.gridId, 6) : null;
+  if (!stationsUrl || !stationsUrl.startsWith(`${NWS_BASE}/`) || !office || !/^[A-Z]{3}$/.test(office)) {
     throw new Error("The National Weather Service returned no station list for this location.");
   }
-  return url;
+  return { office, stationsUrl };
 }
 
 /** /gridpoints/.../stations response → nearest station (NWS lists by distance). */

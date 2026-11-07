@@ -48,3 +48,21 @@ export const BASEMAP_PROVIDER: "MapTiler" | "CARTO" = useMapTiler
 export const BASEMAP_STYLE_URL = useMapTiler
   ? `https://api.maptiler.com/maps/${MAPTILER_STYLE_ID}/style.json?key=${MAPTILER_API_KEY}`
   : CARTO_POSITRON_STYLE_URL;
+
+export type MapTheme = "dark" | "light";
+
+/**
+ * Basemap per theme. The dark canvas (like county snow-route maps) makes the
+ * colored road overlay easiest to read. It needs MapTiler: CARTO's dark style
+ * uses a different tile schema that RoadSalt cannot read roads from, so
+ * without a key only the light basemap is offered.
+ */
+export const BASEMAP_STYLES: Record<MapTheme, string | null> = {
+  light: BASEMAP_STYLE_URL,
+  dark: useMapTiler
+    ? `https://api.maptiler.com/maps/dataviz-dark/style.json?key=${MAPTILER_API_KEY}`
+    : null,
+};
+
+/** Light by default; dark is one click away (when MapTiler is configured). */
+export const DEFAULT_MAP_THEME: MapTheme = "light";

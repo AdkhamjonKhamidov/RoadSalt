@@ -9,6 +9,9 @@ RoadSalt uses only public, real-world data. Every provider is called with a time
 | OpenStreetMap Overpass API | Detailed roads and features (OSM IDs, tags, unnamed and service roads) | Browser (`app/lib/overpass.ts`) | None |
 | Open-Meteo Forecast | Current conditions and 24-hour forecast | Server route `/api/weather` | None |
 | National Weather Service (api.weather.gov) | Measured station observations and active alerts (US only) | Server route `/api/observations` | None |
+| NWS Local Storm Reports via Iowa Environmental Mesonet | Spotter, public and mesonet storm reports near the location (US) | Server route `/api/storm-reports` | None |
+| Local agency plow-status feeds (ArcGIS) | Plow / treatment status where an agency publishes it | Server route `/api/plow-status` | None |
+| TomTom Traffic Incidents API v5 | Live road closures and hazards (US) | Server route `/api/incidents` | `TOMTOM_API_KEY` (server-only, free tier) |
 
 ## Normalized data structures (`app/lib/data-types.ts`)
 
@@ -21,7 +24,7 @@ RoadSalt uses only public, real-world data. Every provider is called with a time
   - Geometry is a GeoJSON `LineString` or `MultiLineString` in `[lon, lat]`.
 - **EnvironmentalFeature** (`EnvironmentalProperties`):
   - `featureId`, `osmId`, `name`.
-  - `kind`: waterway, water, wetland, farmland or protected.
+  - `kind`: waterway, water, wetland, farmland, forest or protected.
   - `subtype`: for example stream, river, pond, marsh or farmland.
   - Geometry is a LineString or (Multi)Polygon.
 - **WeatherData:** `latitude`, `longitude`, `timezone`, and `current` with `time`, `temperature`, `apparentTemperature`, `relativeHumidity`, `windSpeed`, `precipitation` and `weatherCode`. Optional values are `null` when not provided. Also `hourly` (24 hours from the current hour), `updatedAt` and `source`.
@@ -103,6 +106,52 @@ RoadSalt uses only public, real-world data. Every provider is called with a time
 - **With `NEXT_PUBLIC_MAPTILER_API_KEY`:** `https://api.maptiler.com/maps/<NEXT_PUBLIC_MAPTILER_STYLE_ID or positron>/style.json?key=…`. The key is public by design; restrict it to your domains in the MapTiler dashboard.
 - **Without a key:** CARTO Positron `https://basemaps.cartocdn.com/gl/positron-gl-style/style.json`, which is for development and demos.
 - **Attribution:** the map's attribution control shows "© MapTiler © OpenStreetMap contributors" or "© CARTO © OpenStreetMap contributors". It must stay visible.
+
+## 7. NWS Local Storm Reports (nationwide local reporting)
+
+- **What they are:** reports issued by each NWS forecast office from trained spotters, emergency managers, the public, mesonets and road crews. They cover snow totals, freezing rain, ice, wind and similar events.
+- **Flow** (via `/api/storm-reports?lat=..&lon=..`):
+  1. `api.weather.gov/points` gives the location's forecast office (for example AKQ or MPX), cached for 24 h.
+  2. `https://mesonet.agron.iastate.edu/geojson/lsr.geojson?wfos=<office>&sts=<now−72h>&ets=<now>` returns that office's reports.
+  3. Reports are kept if they lie within 80 km (about 50 mi), deduplicated and sorted newest first. Winter types (snow, sleet, freezing rain, ice, blizzard, cold) are flagged and listed first.
+- **Caching:** 10 minutes per point.
+- **Map and units:** reports appear as map points (blue = winter), and magnitudes are converted to °C, cm or km/h when metric is selected.
+- **Limits:** reports exist only when someone reported something. "No reports" is not evidence of clear roads. Coverage is US only, and timing depends on each office.
+- **Attribution:** National Weather Service, archived by the Iowa Environmental Mesonet, Iowa State University.
+
+## 8. Local agency plow-status feeds
+
+- **Why a registry:** there is no national plow or treatment dataset. Some counties, cities and DOTs publish one, usually as an ArcGIS FeatureServer layer, each with its own field names. Automatic discovery through ArcGIS search was tested and rejected, because its area filter returned unrelated worldwide items. Feeds are therefore registered by hand in `app/lib/plow-feeds.ts` (`PLOW_FEEDS`), each with its verified extent and field mapping.
+- **Registered feeds:** St. Mary's County, MD, "Public Snow Removal Map": `services3.arcgis.com/R7akN8K2mtP0bdMI/.../Snow_Routes_Public/FeatureServer/0`. It has 572 route segments, with fields `Group_`, `Status`, `EditDate`, `FIRST_Rout`, `FIRST_SERV` and `SUM_Miles`. Status values run from "Untreated" and "Inspected Plowed or Treated" to "2nd" through "6th Pass".
+- **Flow:** `/api/plow-status?lat&lon` returns the feeds whose extent (plus about 5 km) contains the point. It queries each with `f=geojson`, `outSR=4326` and light simplification, caches for 2 minutes, and normalizes each segment: name, raw status, category (untreated, treated, repeat-pass or unknown), update time and a stale flag. Feed URLs come only from the registry, never from the request.
+- **Honesty rules:**
+  - Status older than 48 hours is drawn gray and labelled outdated, never shown as current conditions.
+  - Unrecognized status text stays "unknown".
+  - Outside every feed, the UI says no feed is connected; it never infers status.
+- **Adding a feed:** see `programmer.md` ("Adding a local plow-status feed").
+
+## 9. Basemap themes
+
+- **Dark (default when a MapTiler key is set):** MapTiler `dataviz-dark`, the dark canvas style used by county snow-route maps, so colored roads stand out. It uses the same OpenMapTiles layer names, so roads and features are still read from it.
+- **Light:** MapTiler `positron`, or CARTO Positron without a key. CARTO's dark style uses a different tile schema (Protomaps), so without a MapTiler key only the light theme is offered.
+- **Tile feature classes:** `landcover` class `wood` or `forest` becomes forest. Through Overpass, `natural=wood` and `landuse=forest` become forest. Forests are shown and listed, but they don't set the sensitivity level, because woods line most rural roads.
+
+## 10. Road conditions (default map view)
+
+Every colour is backed by named data. Green means **nothing is reported**, never "safe".
+
+| Colour | Meaning | Source |
+|---|---|---|
+| `#E00000` Closed | A reported road closure, drawn along the closed stretch | TomTom incident `iconCategory` 8 |
+| `#F1A344` Use caution | A reported hazard on that stretch (accident, ice, flooding, dangerous conditions, road works, lane closure, fog, wind, jam, broken-down vehicle), **or** an area-wide winter road alert, **or** freezing precipitation in the forecast | TomTom; NWS alerts (winter storm, winter weather, ice storm, blizzard, freezing rain/drizzle/fog, snow squall, lake-effect/heavy snow, sleet); Open-Meteo (Elevated weather attention) |
+| `#B7D894` No reported problems | Incident data loaded and nothing reported on this road, and no area-wide winter hazard | TomTom + NWS + Open-Meteo |
+| Gray: No condition data | Incident data not configured or unavailable, and no area caution | — |
+
+- NWS **Freeze Warnings, Frost Advisories, Wind Chill and cold alerts are excluded** from area caution. They concern crops and people, not roads, and flagging every road for them would be misleading.
+- **TomTom request:** `GET https://api.tomtom.com/traffic/services/5/incidentDetails?key=…&bbox=<±0.1°>&fields={incidents{…}}&timeValidityFilter=present&language=en-US`, made from `/api/incidents` only, so the key never reaches the browser. It's cached for 3 minutes per ~1 km cell; the free tier allows about 2,500 requests a day. Without a key the route answers `{ configured: false }`, and the banner says closures are not connected.
+- **Parsing** (`app/lib/traffic-incidents.ts`): validates geometry (Point or LineString), maps `iconCategory` to closed or caution, and drops unknown categories. It keeps description, from/to, road numbers and start/end times, and deduplicates by id.
+- **Not yet verified against a live TomTom response:** no key was available during development. The parser is built from the documented v5 format and covered by fixture tests.
+- **Attribution:** "Traffic data © TomTom".
 
 ## Not connected
 

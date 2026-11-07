@@ -120,6 +120,9 @@ function classifyEnvironment(
   ) {
     return "farmland";
   }
+  if (tags.natural === "wood" || tags.landuse === "forest") {
+    return "forest";
+  }
   // protect_class 21–29 are social/cultural protections (historic districts,
   // heritage sites), not natural areas, so they are not environmental features.
   const protectClass = Number(tags.protect_class);
@@ -287,6 +290,7 @@ function featureGeometry(
     kind === "water" ||
     kind === "wetland" ||
     kind === "farmland" ||
+    kind === "forest" ||
     kind === "protected";
   if (closed && areaKind) {
     return { type: "Polygon", coordinates: [line] } satisfies Polygon;
@@ -352,6 +356,8 @@ function environmentalSubtype(
       return tags.wetland ?? "wetland";
     case "farmland":
       return tags.landuse;
+    case "forest":
+      return tags.leaf_type ? `${tags.leaf_type} forest` : tags.natural === "wood" ? "woodland" : "forest";
     case "protected":
       return tags.leisure ?? tags.boundary;
   }
@@ -400,6 +406,8 @@ export function overpassQuery(
     `wr[water];`,
     `wr[wetland];`,
     `wr[landuse~"^(farmland|farmyard|orchard|vineyard|plant_nursery)$"];`,
+    `wr[natural=wood];`,
+    `wr[landuse=forest];`,
     `wr[boundary~"^(protected_area|national_park)$"];`,
     `wr[leisure=nature_reserve];`,
     `wr[protect_class];`,

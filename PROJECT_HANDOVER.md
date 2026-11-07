@@ -28,10 +28,16 @@ Design: navy `#112D4E`, blue `#3F72AF`, pale blue `#DBE2EF`, off-white `#F9F7F7`
 | NWS observations and alerts | **Implemented, verified.** Nearest station per location (KSBY Salisbury, KDMH Baltimore, KNAK Annapolis). Non-US locations get a clear 404 message. |
 | Basemap | MapTiler when `NEXT_PUBLIC_MAPTILER_API_KEY` is set (currently in use), otherwise CARTO. |
 | Environmental assessment | Approximate planar distance from the whole loaded road to mapped features; High ≤ 50 m, Moderate ≤ 250 m, Low, Unknown. Not proof of pollution. |
-| Tests | `npm test`: 26 tests (Node built-in runner) covering the geocoding, Overpass, Open-Meteo and NWS parsers, malformed input, proximity, validation and cache. |
+| Tests | `npm test`: 38 tests (Node built-in runner) covering parsers (geocoding, Overpass, Open-Meteo, NWS, storm reports, plow feeds), units, malformed input, proximity and per-road sensitivity, validation and cache. |
+| Road map styling | **Implemented, browser-verified.** Dark basemap by default (Light optional); bold roads with casings; "Color roads by" road type, nearby water/wetland/farmland, or agency plow status. Three road accent colours only. |
+| Local reporting | **Implemented, verified.** NWS alerts plus NWS Local Storm Reports (72 h, ~50 mi, US-wide via IEM) in a "Local reports" panel and as map points. Agency plow status from the `PLOW_FEEDS` registry (St. Mary's County MD); stale status shown gray as outdated. |
+| Units | **Implemented, verified.** °F/mph/in/ft by default; °F/°C switch, remembered per browser. |
+| Mobile | **Implemented, verified at 375 px.** Map ~62 % of height; map key and secondary panels collapsed; no horizontal scroll. |
+| Forests | **Implemented.** New environmental kind (tiles + Overpass); listed but excluded from the sensitivity level. |
+| Road conditions view (default) | **Implemented; partly verified.** Green / orange / red / gray road colours, closure and hazard overlay, status banner and per-road condition card. Closures need `TOMTOM_API_KEY` (not yet set, so the live TomTom response is unverified). Area caution comes from NWS winter road alerts or forecast freezing precipitation. Light theme is the default. |
 | Elevation, terrain, risk scoring | Not implemented (out of scope). |
 
-Checks on 2026-11-07, all passing: `npm run lint`, `npx tsc --noEmit`, `npm test` (26/26) and `npm run build`. Mobile layout was not re-checked after the search box was added.
+Checks on 2026-11-07, all passing: `npm run lint`, `npx tsc --noEmit`, `npm test` (38/38) and `npm run build`. The mobile layout was verified at 375 px.
 
 ## Technical architecture
 
@@ -76,8 +82,9 @@ See `docs/DATA_SOURCES.md` for endpoints, queries, parsing rules, caching, limit
 
 ## Exact next development step
 
+0. Add `TOMTOM_API_KEY` to `.env.local` (and a blank line to `.env.example`), restart, and verify closures and hazards render. Check the response parser against real data.
 1. Verify a successful Overpass load. Reload when the public instances are quieter, or press Retry. Confirm that the status changes to "OSM detail (Overpass)", that unnamed and service roads become selectable, and that the OSM way ID and tags appear in road details.
-2. Re-check the mobile layout (375 px) with the search box in the header.
+2. Register more official agency plow-status feeds (see "Adding a local plow-status feed" in `programmer.md`) and check the plow-status view during an active storm, when status is fresh.
 3. Only after that, and only on explicit request: the next milestone (road risk highlighting).
 
 ## Instructions for the next session
