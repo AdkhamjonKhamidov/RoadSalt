@@ -20,25 +20,25 @@ Demo location: **1101 Camden Ave, Salisbury, MD 21801** (cached coordinates in `
 - **Stack:** Next.js 16.4.5 App Router, React 19.3, TypeScript 5 (strict), Tailwind CSS 4 via `@tailwindcss/turbopack`, MapLibre GL JS 6.16. Package manager: **npm** (`package-lock.json`). This Next.js version has breaking changes: read the relevant guide in `node_modules/next/dist/docs/` before writing Next-specific code (see AGENTS.md above).
 - **Layout:**
   - `app/page.tsx`: thin entry that renders `RoadSaltDashboard`.
-  - `app/components/RoadSaltDashboard.tsx`: client component. It owns the selected `location`, location-scoped requests (tagged with a location key and aborted on change, so stale results never overwrite newer ones), the choice of map data source (Overpass over tile data), and the weather, observation, forecast and road-details panels. `LocationSearch.tsx` is the search combobox.
-  - `app/components/MapCanvas.tsx`: client component. It owns the MapLibre instance, sources/layers, selection and cleanup. `map-config.ts` re-exports config.
-  - `app/lib/`: framework-free logic and types (`demo-config`, `data-types`, `geojson`, `proximity`, `weather`).
-  - `app/lib/`: `validation` (guards, cache), `geocoding` (Photon), `geojson` (Overpass query and normalizer), `overpass` (parallel instances, backoff, 25 s deadline, per-location tab cache), `tile-features` (roads and features from basemap tiles), `open-meteo`, `nws`, `proximity`, `weather`, `data-types`, `demo-config`.
-  - Routes: `/api/geocode` (Photon), `/api/weather?lat&lon` (Open-Meteo), `/api/observations?lat&lon` (NWS) `/api/incidents?lat&lon` (TomTom closures and hazards; server-only `TOMTOM_API_KEY`), `/api/storm-reports?lat&lon` (NWS Local Storm Reports via IEM), `/api/plow-status?lat&lon` (registered agency plow feeds, `app/lib/plow-feeds.ts`) and `/api/map-data?lat&lon` (server Overpass, not used by the UI).
-  - `app/api/weather/route.ts` (Open-Meteo): server route handler. `app/api/map-data/route.ts` (Overpass) is a kept server alternative that the UI does not currently call.
+  - `app/components/RoadSaltDashboard.tsx`: client component. It owns the selected `location`, location-scoped requests (tagged with a location key and aborted on change, so stale results never overwrite newer ones), roads and features read from the basemap tiles (`onTileData`), and the weather, observation, forecast and road-details panels. `LocationSearch.tsx` is the search combobox.
+  - `app/components/MapCanvas.tsx`: client component. It owns the MapLibre instance, sources/layers, selection and cleanup.
+  - `app/lib/`: `validation` (guards, in-memory cache), `cache-db` (server-only persistent cache on built-in `node:sqlite`, `.data/roadsalt.db`), `segments` (100 m road segments and per-segment runoff exposure), `advice` (Gemini context, prompt and stream parsing), `geocoding` (Photon), `tile-features` (roads and features from basemap tiles), `open-meteo`, `nws`, `proximity`, `weather`, `data-types`, `demo-config`.
+  - Routes: `/api/geocode` (Photon), `/api/weather?lat&lon` (Open-Meteo), `/api/observations?lat&lon` (NWS) `/api/incidents?lat&lon` (TomTom closures and hazards; server-only `TOMTOM_API_KEY`), `/api/storm-reports?lat&lon` (NWS Local Storm Reports via IEM), `/api/plow-status?lat&lon` (registered agency plow feeds, `app/lib/plow-feeds.ts`) `/api/advice` (POST, Gemini treatment approach, NDJSON stream) and `/api/cache` (read-only cache statistics).
+  - `app/api/weather/route.ts` (Open-Meteo): server route handler.
 - **State:** local React state only. No global store, context or data-fetching library. Keep it that way unless the handover records an approved change.
-- **API pattern:** weather goes through the same-origin `/api/weather` route. OSM map data is requested **directly from the browser** via `loadMapDataInBrowser()`. The user approved this on 2026-11-07, because public Overpass instances accept CORS and the server-side path kept timing out. Any new provider goes through a server route unless the user approves otherwise. Each route calls the provider server-side with `AbortSignal.timeout`, validates the untrusted JSON field by field, shares in-flight requests (`pending`), caches only *successful* results in process memory, and returns `{ error }` with a meaningful status (429/502/503/504) and `Cache-Control: no-store` on failure.
+- **API pattern:** roads and environmental features come only from the basemap's OSM vector tiles (`tile-features`). Overpass was removed on 2026-11-08 at the user's request: its public instances never answered, and the tiles cover everything the app uses. Any new provider goes through a server route unless the user approves otherwise. Each route calls the provider server-side with `AbortSignal.timeout`, validates the untrusted JSON field by field, shares in-flight requests (`pending`), caches only *successful* results in the persistent `PersistentCache` (memory + SQLite, one namespace per route), and returns `{ error }` with a meaningful status (429/502/503/504) and `Cache-Control: no-store` on failure.
 - **Errors:** surface failures to the user with a retry path. Never swallow them, and never replace them with sample data.
 - **TypeScript:** no `any`. Treat external payloads as `unknown` and narrow them. Shared shapes belong in `app/lib/data-types.ts`. Prefer small pure functions in `app/lib/` so they can be checked in isolation.
 - **Dependencies:** do not add packages without explicit approval.
 
 ## Design rules
 
-- Palette: navy `#112D4E`, blue `#3F72AF`, pale blue `#DBE2EF`, off-white `#F9F7F7` (CSS variables in `app/globals.css`). Typography: **Georgia** only.
-- Map: **light basemap by default**, dark optional. The default road view is **Road conditions**: `#B7D894` no reported problems, `#F1A344` use caution, `#E00000` closed, gray no data (`CONDITION_COLORS` in `app/lib/road-conditions.ts`). Other views use `ROAD_COLORS` in `MapCanvas.tsx` (red-orange, amber, teal, plus white or navy and palette blue). Keep the colour set small.
+- **Direction: municipal engineering meets environmental research.** A GIS-style workspace: a thin navy header, a full-height map with one control panel (view, basemap, legend, layers), and a flat information panel on the right. Use sections, Georgia headings, hairline rules and data tables, not stacks of rounded cards. Avoid marketing copy, pills, gradients, heavy shadows and decorative icons.
+- Palette: navy `#112D4E`, blue `#3F72AF`, pale blue `#DBE2EF`, off-white `#F9F7F7`, plus neutrals and status colours defined as CSS variables in `app/globals.css`. Typography: **Georgia** for the wordmark, headings, place and road names; a plain system sans-serif (`--sans`) for dense UI, tables and controls. Radius 3 px; shadows only on map controls.
+- Map: **light basemap by default**, dark optional. The default road view is **Road conditions** (`CONDITION_COLORS` in `app/lib/road-conditions.ts`; see below). Other views use `ROAD_COLORS` in `MapCanvas.tsx` (red-orange, amber, teal, plus white or navy and palette blue). Keep the colour set small.
 - Road condition colours must come from named data (TomTom incidents, NWS winter road alerts, Open-Meteo freezing-precipitation forecast). Never label a road "safe"; green is "No reported problems". Never colour roads green when incident data is not loaded.
 - Units: US customary by default (°F, mph, in, ft/mi) with a °F/°C switch; keep data metric internally and convert only for display (`app/lib/units.ts`).
-- Traditional, authoritative, clean, restrained: subtle solid borders, minimal panels, clear labels, cautious wording. No gradients, no dashboard sprawl, no novelty styling.
+- Road condition colours (`CONDITION_COLORS`): "no reported problems" is a quiet slate `#6F8CAD`, so only caution (`#D4890F`) and closed (`#B3261E`) stand out; the selected road is navy with a white casing.
 - Keep the map central and dominant on all viewports. Reuse existing components and CSS classes before adding new ones. Do not redesign.
 - Prioritize usability: visible loading, empty and error states, keyboard access, readable contrast.
 
@@ -56,6 +56,8 @@ Demo location: **1101 Camden Ave, Salisbury, MD 21801** (cached coordinates in `
 
 Never recommend salt application rates.
 
+**Approved exception (user, 2026-11-07): Gemini treatment approach.** For the selected road, `/api/advice` (Gemini Interactions API with Google Search grounding, server-only `GEMINI_API_KEY`, optional `GEMINI_MODEL`, default in `app/lib/advice.ts`) writes a short treatment *strategy* (for example anti-icing, pre-wetting, plowing first, extra care near the named water feature). It must stay labelled as AI-generated and for review, must never give numeric rates (enforced in the system instruction and by `redactRates`), must never call a road icy or safe, must show its web sources and Google's Search Suggestions (a Terms requirement for grounded results), and it caches answers per road per hour.
+
 ## Development workflow
 
 1. Understand the existing implementation (handover first, then follow imports).
@@ -63,14 +65,14 @@ Never recommend salt application rates.
 3. Plan before substantial changes. For architecture-level ones, consult the `project-architect` agent.
 4. Reuse existing components, helpers and types.
 5. Implement incrementally.
-6. Test with `/verify-project` (lint, `tsc --noEmit`, `npm test`, build) plus targeted checks. Use the browser to verify UI and map changes.
+6. Test with `/verify-project` (lint, `tsc --noEmit`, `npm test`, build) plus targeted checks. For UI and map changes, run `npm run test:ui` (Playwright, `e2e/`; it starts or reuses the dev server and writes screenshots to `e2e/screenshots/`) and look at the screenshots. Map overlays are WebGL, so only the screenshots show whether they actually render.
 7. Review for regressions (`/review-changes`).
 8. Update documentation (`CHANGELOG.md`, and others as relevant; see the `documentation-maintenance` skill).
 9. Report what changed, what was verified and what remains incomplete. Never claim a check passed if it did not run.
 
 ## Scope protection
 
-Do **not** add salt optimization, application-rate advice, inventory management, crew scheduling, authentication, AI chat, machine learning, large analytics dashboards, databases or extra backend infrastructure. Do not add elevation/terrain work or the "road risk highlighting" milestone unless the user explicitly requests it. Plow or treatment status may only come from a registered official agency feed; never infer it, and show stale status (> 48 h) as outdated. Any expansion of scope needs explicit user approval.
+Do **not** add salt optimization, application-rate advice, inventory management, crew scheduling, authentication, AI chat (beyond the approved per-road Gemini suggestion above), machine learning, large analytics dashboards, or extra backend infrastructure. The one approved database is the local SQLite response cache (`app/lib/cache-db.ts`, user request 2026-11-08); don't add other stores without approval. Do not add elevation/terrain work or the "road risk highlighting" milestone unless the user explicitly requests it. Plow or treatment status may only come from a registered official agency feed; never infer it, and show stale status (> 48 h) as outdated. Any expansion of scope needs explicit user approval.
 
 Do not overwrite or revert `public/assets/favicon.png`. It is the user's own image.
 

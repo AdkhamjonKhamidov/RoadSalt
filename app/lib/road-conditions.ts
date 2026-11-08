@@ -4,15 +4,16 @@ import { minimumDistance } from "./proximity";
 import type { WeatherAttention } from "./weather";
 
 // Road condition categories shown on the map. Each colour is backed by real,
-// named data; "clear" means nothing was reported, never "safe".
+// named data; "clear" means nothing was reported, never "safe". "Clear" is a
+// quiet slate blue on purpose: only reported problems should stand out.
 
 export type RoadCondition = "clear" | "caution" | "closed" | "unknown";
 
 export const CONDITION_COLORS: Record<RoadCondition, string> = {
-  clear: "#B7D894",
-  caution: "#F1A344",
-  closed: "#E00000",
-  unknown: "#9AA3AD",
+  clear: "#6F8CAD",
+  caution: "#D4890F",
+  closed: "#B3261E",
+  unknown: "#A7B0BC",
 };
 
 export const CONDITION_LABELS: Record<RoadCondition, string> = {
@@ -106,7 +107,7 @@ export function summarizeConditions(input: {
     return {
       tone: "clear",
       headline: "No closures or hazards reported nearby.",
-      detail: "Green means nothing is reported — not a guarantee of road surface conditions.",
+      detail: "No report is not a guarantee of road surface conditions.",
     };
   }
   return {

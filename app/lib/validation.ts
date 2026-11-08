@@ -66,9 +66,10 @@ export class ExpiringCache<V> {
     return entry.value;
   }
 
-  set(key: string, value: V): void {
+  /** `ttlMs` overrides the default lifetime (e.g. the time left on a stored entry). */
+  set(key: string, value: V, ttlMs = this.ttlMs): void {
     this.entries.delete(key);
-    this.entries.set(key, { expiresAt: Date.now() + this.ttlMs, value });
+    this.entries.set(key, { expiresAt: Date.now() + ttlMs, value });
     while (this.entries.size > this.maxEntries) {
       const oldest = this.entries.keys().next().value;
       if (oldest === undefined) break;

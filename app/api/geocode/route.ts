@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { PersistentCache } from "../../lib/cache-db";
 import type { Location } from "../../lib/data-types";
 import { normalizeQuery, parsePhotonResponse, photonUrl } from "../../lib/geocoding";
-import { coordinatesFromSearchParams, ExpiringCache } from "../../lib/validation";
+import { coordinatesFromSearchParams } from "../../lib/validation";
 
 // GET /api/geocode?q=<text>[&lat=..&lon=..] → { results: Location[] }
 // Proxies Photon so results are cached server-side (repeated queries never hit
@@ -9,7 +10,7 @@ import { coordinatesFromSearchParams, ExpiringCache } from "../../lib/validation
 // The client debounces typing and sends nothing for queries under 3 characters.
 
 const REQUEST_TIMEOUT_MS = 8_000;
-const cache = new ExpiringCache<Location[]>(500, 60 * 60 * 1000);
+const cache = new PersistentCache<Location[]>("geocode", 500, 60 * 60 * 1000);
 const pending = new Map<string, Promise<Location[]>>();
 
 async function geocode(

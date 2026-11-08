@@ -374,55 +374,69 @@ function geometryParts(geometry: Geometry): Geometry[] {
   }
 }
 
+/** Feature parts that set the sensitivity level, with bounding boxes. */
+export type SensitiveParts = { geometry: Geometry; bounds: Bounds; feature: EnvironmentalProperties }[];
+
+/** Prepares water, wetland, farmland and protected parts (not forests) for fast lookups. */
+export function prepareSensitiveParts(features: EnvironmentFeature[]): SensitiveParts {
+  return features
+    .filter((feature) => !LEVEL_EXCLUDED_KINDS.has(feature.properties.kind))
+    .flatMap((feature) => geometryParts(feature.geometry).map((geometry) => ({ geometry, feature: feature.properties })))
+    .map((part) => ({ ...part, bounds: geometryBounds(part.geometry) }))
+    .filter((part): part is SensitiveParts[number] => part.bounds !== null);
+}
+
+export function levelForDistance(distanceMeters: number | null): SensitivityLevel {
+  if (distanceMeters === null) return "Low";
+  return distanceMeters <= ENVIRONMENTAL_THRESHOLDS_METERS.high
+    ? "High"
+    : distanceMeters <= ENVIRONMENTAL_THRESHOLDS_METERS.moderate
+      ? "Moderate"
+      : "Low";
+}
+
 /**
- * Sensitivity level for many roads at once (for colouring the map).
- * Same rules as assessEnvironmentalSensitivity (forests excluded from the
- * level), but each feature part is bounding-box filtered first so only parts
- * within the moderate threshold are measured.
+ * Nearest sensitive feature within the moderate threshold, or null when none
+ * is that close. Parts are bounding-box filtered first, so only nearby
+ * candidates are measured.
+ */
+export function nearestSensitiveFeature(
+  geometry: Geometry,
+  parts: SensitiveParts,
+): { distanceMeters: number; feature: EnvironmentalProperties } | null {
+  const bounds = geometryBounds(geometry);
+  if (!bounds) return null;
+  // Expand by the moderate threshold (degrees; longitude scaled by latitude).
+  const latitude = (bounds[1] + bounds[3]) / 2;
+  const marginLat = ENVIRONMENTAL_THRESHOLDS_METERS.moderate / 111_320;
+  const marginLon = marginLat / Math.max(0.2, Math.cos((latitude * Math.PI) / 180));
+  const [west, south, east, north] = [bounds[0] - marginLon, bounds[1] - marginLat, bounds[2] + marginLon, bounds[3] + marginLat];
+  let best: { distanceMeters: number; feature: EnvironmentalProperties } | null = null;
+  for (const part of parts) {
+    const [pw, ps, pe, pn] = part.bounds;
+    if (pe < west || pw > east || pn < south || ps > north) continue;
+    const distance = minimumDistance(geometry, part.geometry);
+    if (distance !== null && (!best || distance < best.distanceMeters)) best = { distanceMeters: distance, feature: part.feature };
+    if (best && best.distanceMeters === 0) break;
+  }
+  return best && best.distanceMeters <= ENVIRONMENTAL_THRESHOLDS_METERS.moderate ? best : null;
+}
+
+/**
+ * Sensitivity level for many roads at once. Same rules as
+ * assessEnvironmentalSensitivity (forests excluded from the level).
  */
 export function roadSensitivityLevels(
   roads: RoadFeature[],
   features: EnvironmentFeature[],
 ): Map<string, SensitivityLevel> {
   const levels = new Map<string, SensitivityLevel>();
-  const parts = features
-    .filter((feature) => !LEVEL_EXCLUDED_KINDS.has(feature.properties.kind))
-    .flatMap((feature) => geometryParts(feature.geometry))
-    .map((geometry) => ({ geometry, bounds: geometryBounds(geometry) }))
-    .filter((part): part is { geometry: Geometry; bounds: Bounds } => part.bounds !== null);
-
+  const parts = prepareSensitiveParts(features);
   for (const road of roads) {
-    const roadBounds = geometryBounds(road.geometry);
-    if (!roadBounds) continue;
-    if (parts.length === 0) {
-      levels.set(road.properties.roadId, "Unknown");
-      continue;
-    }
-    // Expand by the moderate threshold (degrees; longitude scaled by latitude).
-    const latitude = (roadBounds[1] + roadBounds[3]) / 2;
-    const marginLat = ENVIRONMENTAL_THRESHOLDS_METERS.moderate / 111_320;
-    const marginLon = marginLat / Math.max(0.2, Math.cos((latitude * Math.PI) / 180));
-    const [west, south, east, north] = [
-      roadBounds[0] - marginLon,
-      roadBounds[1] - marginLat,
-      roadBounds[2] + marginLon,
-      roadBounds[3] + marginLat,
-    ];
-    let nearest = Infinity;
-    for (const part of parts) {
-      const [pw, ps, pe, pn] = part.bounds;
-      if (pe < west || pw > east || pn < south || ps > north) continue;
-      const distance = minimumDistance(road.geometry, part.geometry);
-      if (distance !== null && distance < nearest) nearest = distance;
-      if (nearest <= ENVIRONMENTAL_THRESHOLDS_METERS.high) break;
-    }
+    if (!geometryBounds(road.geometry)) continue;
     levels.set(
       road.properties.roadId,
-      nearest <= ENVIRONMENTAL_THRESHOLDS_METERS.high
-        ? "High"
-        : nearest <= ENVIRONMENTAL_THRESHOLDS_METERS.moderate
-          ? "Moderate"
-          : "Low",
+      parts.length === 0 ? "Unknown" : levelForDistance(nearestSensitiveFeature(road.geometry, parts)?.distanceMeters ?? null),
     );
   }
   return levels;

@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { PersistentCache } from "../../lib/cache-db";
 import {
   feedsForLocation,
   parsePlowFeedResponse,
@@ -6,14 +7,14 @@ import {
   plowQueryUrl,
   type PlowFeedResult,
 } from "../../lib/plow-feeds";
-import { coordinatesFromSearchParams, ExpiringCache } from "../../lib/validation";
+import { coordinatesFromSearchParams } from "../../lib/validation";
 
 // GET /api/plow-status?lat=..&lon=.. → plow/treatment status from registered
 // local agency feeds covering the point. `feeds: []` means no feed covers it.
 // Feed URLs come only from the registry (never from the request).
 
 const REQUEST_TIMEOUT_MS = 12_000;
-const cache = new ExpiringCache<PlowFeedResult>(20, 2 * 60 * 1000);
+const cache = new PersistentCache<PlowFeedResult>("plow-status", 20, 2 * 60 * 1000);
 
 async function loadFeed(feedId: string): Promise<PlowFeedResult> {
   const hit = cache.get(feedId);

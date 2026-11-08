@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { PersistentCache } from "../../lib/cache-db";
 import type { StormReportData } from "../../lib/data-types";
 import { NwsError, nwsPlace } from "../../lib/nws-server";
 import {
@@ -10,7 +11,6 @@ import {
 import {
   coordinateKey,
   coordinatesFromSearchParams,
-  ExpiringCache,
 } from "../../lib/validation";
 
 // GET /api/storm-reports?lat=..&lon=.. → NWS Local Storm Reports from the
@@ -19,7 +19,7 @@ import {
 // Mesonet LSR archive for that office.
 
 const REQUEST_TIMEOUT_MS = 10_000;
-const cache = new ExpiringCache<StormReportData>(200, 10 * 60 * 1000);
+const cache = new PersistentCache<StormReportData>("storm-reports", 200, 10 * 60 * 1000);
 const pending = new Map<string, Promise<StormReportData>>();
 
 async function fetchReports(latitude: number, longitude: number): Promise<StormReportData> {

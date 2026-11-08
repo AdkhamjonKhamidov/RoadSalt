@@ -1,5 +1,66 @@
 # Changelog
 
+## 2026-11-08 — Overpass removed, cache database, 100 m runoff segments
+
+### What changed
+- **Removed Overpass** (`overpass.ts`, `geojson.ts`, `/api/map-data`, its tests and UI states) and other unused code: the hidden "Road type" view, `map-config.ts`, `formatLength`, OSM id/tag fields that tiles never provide, and Next.js starter SVGs. Roads and features now come only from the basemap's vector tiles, which the app always used in practice.
+- **Persistent cache database:** `PersistentCache` (`app/lib/cache-db.ts`) on Node's built-in `node:sqlite` (no new runtime dependency), `.data/roadsalt.db`, gitignored. It replaces every in-memory route cache (weather, observations, NWS points, incidents, storm reports, plow status, geocoding, Gemini). An in-memory hot layer sits in front, and the cache survives server restarts. `GET /api/cache` shows entries, size and hits per namespace. `@types/node` is now v24 to match the runtime, and `engines.node` is `>=22.18`.
+- **100 m road segments:** `app/lib/segments.ts` splits each road into 100 m pieces and rates each one by its own distance to mapped water, wetland, farmland or protected areas (forests excluded, same 50/250 m thresholds). The Environmental proximity view colours the map per segment, and the selected road shows as a navy halo under its segment colours. The panel shows a segment strip, counts per level and the exposed stretches with the nearest feature. Gemini receives the stretches and targets them.
+- **Gemini:** the key check now accepts newer AI Studio keys (dots), with a clearer "not set" vs "malformed" message. If Search grounding is refused (429 quota, as on this key), the route retries once without web search and the answer says local news wasn't checked. Verified live: first text in about 0.6 s, full answer in about 1.3 s, no rates.
+- Tests: 5 segment unit tests and an updated advice test (43 total). The UI suite (14) adds a cache-database check and the per-segment proximity view.
+
+## 2026-11-07 — Gemini treatment approach per road
+
+### What changed
+- **New "Treatment approach" block** under the selected road. `POST /api/advice` sends the road's real context to Gemini (`gemini-3.5-flash-lite` by default, Interactions API, Google Search grounding for current local news): name and class, reported condition and incidents (TomTom/NWS), nearby mapped features with distances (OSM), the current and 24-hour forecast summary (Open-Meteo), the NWS observation, alerts and winter storm reports. Gemini returns a short strategy: Assessment, Suggested approach, Environmental care, Watch for.
+- **Responsiveness:** the answer streams into the panel as it's written (NDJSON from the route), the request is aborted when another road is selected, and finished answers are cached per road per hour (instant on repeat clicks; "Regenerate" bypasses the cache).
+- **Guardrails:** no numeric application rates (system instruction plus `redactRates`), no "icy" or "safe" claims, labelled AI-generated and for review, web sources listed, and Google's Search Suggestions shown in a sandboxed iframe as the grounding Terms require.
+- **Config:** server-only `GEMINI_API_KEY`, optional `GEMINI_MODEL`. Without a key the block says it isn't connected.
+- 7 new unit tests (`tests/advice.test.ts`); the road-selection UI test now checks the block.
+
+### Why it changed
+- The user asked for an AI-suggested treatment approach on each clicked street, built on live weather, local news and real data. It fits both hackathon tracks: Sustainability (less salt runoff into Eastern Shore waterways) and Public Systems (road maintenance planning).
+- **Not yet verified live:** no `GEMINI_API_KEY` was set during development. The streamed event shape is parsed defensively because Google's docs don't confirm where citations appear in the stream.
+
+## 2026-11-07 — GIS-style redesign on the RoadSalt identity
+
+### What changed
+- **Audit first.** Screenshots at 1440, 900 and 375 px showed stacked rounded cards, a lost identity (stock blue, system font), marketing copy, all-green roads, map controls in four corners, and a °F/°C toggle orphaned on tablet.
+- **Identity restored:** navy, blue, pale blue and off-white with Georgia for the wordmark, headings, place and road names. Dense UI uses a plain sans-serif. Radius is 3 px, and only map controls have shadows.
+- **Layout:** a thin navy header (favicon, wordmark, current location, search, units), a full-height map with a status bar, and a 380 px information panel. The panel has flat sections: selected location (address, coordinates, NWS station, time zone), selected road, nearby environmental features (a feature table, or counts in the loaded area), current weather (model and NWS observation), a 24-hour forecast table, alerts and local reports, and data sources with retrieval times and Overpass status/Retry.
+- **Map:** one control panel holds the road display (Road conditions / Environmental proximity / Plow status), basemap, legend (including mapped feature types) and layers. New: a **Roads** visibility toggle. Recenter sits under the zoom buttons. "No reported problems" roads are now a quiet slate instead of green. Caution and closed are amber and brick red, and the selected road is navy.
+- **Fixed:** the workspace used `flex: 1` (a `0%` basis) inside a container with only a min-height, so it grew to the panel's content height. The map was about 1650 px tall in a 900 px window, with the marker and attribution below the fold.
+- Removed the intro card, the stat tiles and the "Is it passable?" / "Where does its salt go?" copy.
+
+### Why it changed
+- The user asked for a professional environmental and municipal GIS look on the existing identity, with no generic AI-dashboard patterns.
+
+## 2026-11-07 — Simpler, clearer interface; map layer fixes; browser UI tests
+
+### What changed
+- **Redesign for clarity:** a tagline under the name says what RoadSalt is. Before a road is selected, the side panel explains the problem and gives three steps. Selecting a road gives two plain verdicts: "Is it passable?" (TomTom/NWS) and "Where does its salt go?" (mapped water, wetland and farmland nearby). Raw OSM attributes, feature lists and caveats moved behind "More about this road".
+- **At a glance:** three tiles for Roads, Weather and Freeze risk. The forecast, weather details and local reports are collapsed sections. The data-source status and Overpass Retry moved to the panel footer.
+- **Map:** fills the screen height. A view switch ("Road conditions" / "Salt-sensitive areas" / "Plow status" when a feed exists) and the condition summary float on the map. The "Road type" view was removed from the UI, and the key shows only rows for the current view.
+- **Look:** system sans-serif font, white cards, soft shadows and rounded corners replace Georgia and the strict border style (the user lifted those restrictions).
+- **Bug fix: roads hidden under the basemap.** Overlays were inserted below the style's first label layer. In MapTiler's style that layer (`water_name`) comes before buildings and roads, so RoadSalt's roads, selection highlight and incident lines were drawn underneath. Overlays now go above the last basemap geometry layer.
+- **Bug fix: overlays missing after switching Light/Dark.** `isStyleLoaded()` can still be false at `style.load`, so `updateOverlays` returned early until some other prop changed. The load handlers now pass `styleReady`.
+- **Playwright UI tests** (`npm run test:ui`, `e2e/`): 14 tests plus 1 opt-in live Overpass test (`RUN_OVERPASS=1`), with screenshots saved to `e2e/screenshots/`. They block public Overpass by default. New dev dependency: `@playwright/test` (approved by the user).
+
+### Why it changed
+- The user asked for full UI testing with screenshots, then for a much simpler interface that makes the project's purpose obvious.
+## 2026-11-07 — Simpler, clearer interface; map layer fixes; browser UI tests
+
+### What changed
+- **Redesign for clarity:** a tagline under the name says what RoadSalt is. Before a road is selected, the side panel explains the problem and gives three steps. Selecting a road gives two plain verdicts: "Is it passable?" (TomTom/NWS) and "Where does its salt go?" (mapped water, wetland and farmland nearby). Raw OSM attributes, feature lists and caveats moved behind "More about this road".
+- **At a glance:** three tiles for Roads, Weather and Freeze risk. The forecast, weather details and local reports are collapsed sections. The data-source status and Overpass Retry moved to the panel footer.
+- **Map:** fills the screen height. A view switch ("Road conditions" / "Salt-sensitive areas" / "Plow status" when a feed exists) and the condition summary float on the map. The "Road type" view was removed from the UI, and the key shows only rows for the current view.
+- **Look:** system sans-serif font, white cards, soft shadows and rounded corners replace Georgia and the strict border style (the user lifted those restrictions).
+- **Bug fix: roads hidden under the basemap.** Overlays were inserted below the style's first label layer. In MapTiler's style that layer (`water_name`) comes before buildings and roads, so RoadSalt's roads, selection highlight and incident lines were drawn underneath. Overlays now go above the last basemap geometry layer.
+- **Bug fix: overlays missing after switching Light/Dark.** `isStyleLoaded()` can still be false at `style.load`, so `updateOverlays` returned early until some other prop changed. The load handlers now pass `styleReady`.
+- **Playwright UI tests** (`npm run test:ui`, `e2e/`): 14 tests plus 1 opt-in live Overpass test (`RUN_OVERPASS=1`), with screenshots saved to `e2e/screenshots/`. They block public Overpass by default. New dev dependency: `@playwright/test` (approved by the user).
+
+### Why it changed
+- The user asked for full UI testing with screenshots, then for a much simpler interface that makes the project's purpose obvious.
 ## 2026-11-07 — Road conditions view (default), light theme default
 
 ### What changed

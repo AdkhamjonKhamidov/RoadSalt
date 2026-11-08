@@ -177,6 +177,5 @@ export function extractTileMapData(
     environmentalFeatures,
     updatedAt: new Date().toISOString(),
     source: `OpenStreetMap vector tiles (${providerLabel})`,
-    radiusMeters: null,
   };
 }

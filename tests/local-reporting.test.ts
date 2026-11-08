@@ -10,7 +10,6 @@ import {
 } from "../app/lib/plow-feeds";
 import { roadSensitivityLevels } from "../app/lib/proximity";
 import { parseStormReports } from "../app/lib/storm-reports";
-import { overpassToGeoJSON } from "../app/lib/geojson";
 import {
   celsiusToFahrenheit,
   fahrenheitToCelsius,
@@ -107,13 +106,7 @@ test("parses an agency feed and marks old status as stale", () => {
   assert.throws(() => parsePlowFeedResponse(feed, { error: { message: "Invalid token" } }), /Invalid token/);
 });
 
-test("classifies forests from OSM and keeps them out of the sensitivity level", () => {
-  const forest = overpassToGeoJSON({
-    elements: [{ type: "way", id: 9, tags: { natural: "wood" }, geometry: [{ lat: 0, lon: 0 }, { lat: 0.001, lon: 0 }, { lat: 0.001, lon: 0.001 }, { lat: 0, lon: 0 }] }],
-  }).environmentalFeatures.features[0];
-  assert.equal(forest.properties.kind, "forest");
-  assert.equal(forest.properties.subtype, "woodland");
-
+test("keeps forests out of the sensitivity level", () => {
   const road = (id: string, latitudeOffset: number): Feature<Geometry, RoadProperties> => ({
     type: "Feature",
     geometry: { type: "LineString", coordinates: [[0, latitudeOffset], [0.01, latitudeOffset]] },

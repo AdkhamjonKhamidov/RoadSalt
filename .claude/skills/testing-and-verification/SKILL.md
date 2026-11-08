@@ -36,6 +36,9 @@ curl -sS -w "\nHTTP %{http_code}\n" "http://localhost:3000/api/geocode?q=Baltimo
 Record the HTTP status, `source`, `hourly.length` (expect up to 24), road and environment feature counts, and `updatedAt`. A 504/429/503 is a real provider outcome. Report it. Overpass has timed out in this environment before.
 
 ## 4. Browser verification (UI or map changes)
+Run `npm run test:ui` (Playwright, config `playwright.config.ts`, tests in `e2e/`). It starts or reuses `npm run dev`, runs serially against live services, blocks public Overpass by default (`RUN_OVERPASS=1` enables the live Overpass test), and saves one screenshot per feature to `e2e/screenshots/`. **Open the screenshots.** Assertions can't see WebGL map layers: roads drawn under the basemap still pass the DOM checks. For a one-off look, write a throwaway `e2e/zz-*.spec.ts`, run it, then delete it.
+
+Manual checks:
 Use the built-in browser pane at `http://localhost:3000` (the desktop app's `preview_start`/`navigate` tools; `.claude/launch.json` can define the dev server). Check:
 - The map renders, the marker sits at Camden Ave, and the attribution is visible.
 - The weather bar shows live values with source and updated time.

@@ -1,8 +1,0 @@
-export {
-  BASEMAP_PROVIDER,
-  BASEMAP_STYLE_URL,
-  DEMO_CENTER,
-  DEMO_LOCATION,
-  INITIAL_ZOOM,
-  SEARCH_RADIUS_METERS,
-} from "../lib/demo-config";

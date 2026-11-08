@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "RoadSalt",
-  description: "A practical winter road awareness demo for Salisbury, Maryland.",
+  description: "Winter road conditions, and where road salt could harm nearby water, wetlands and farmland.",
   icons: {
     icon: "/assets/favicon.png",
   },
@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className="h-full antialiased">
-      <body className="min-h-full bg-[#F9F7F7] text-[#112D4E]">{children}</body>
+      <body className="min-h-full">{children}</body>
     </html>
   );
 }

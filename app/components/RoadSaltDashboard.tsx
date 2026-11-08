@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import Image from "next/image";
 import type { Feature, FeatureCollection, Geometry, Point } from "geojson";
 import MapCanvas, {
   type IncidentProperties,
@@ -10,6 +11,8 @@ import MapCanvas, {
   type RoadFeatureProperties,
 } from "./MapCanvas";
 import LocationSearch from "./LocationSearch";
+import RoadAdvice from "./RoadAdvice";
+import type { AdviceContext } from "../lib/advice";
 import type {
   EnvironmentalKind,
   EnvironmentalProperties,
@@ -21,9 +24,10 @@ import type {
   StormReportData,
   WeatherData,
 } from "../lib/data-types";
-import { ENVIRONMENTAL_KINDS } from "../lib/data-types";
+import { ENVIRONMENTAL_KIND_LABELS, ENVIRONMENTAL_KINDS } from "../lib/data-types";
 import type { EnvironmentalAssessment } from "../lib/proximity";
-import { assessEnvironmentalSensitivity, roadSensitivityLevels } from "../lib/proximity";
+import { assessEnvironmentalSensitivity, prepareSensitiveParts } from "../lib/proximity";
+import { segmentRoad, segmentRoads, summarizeSegments } from "../lib/segments";
 import {
   classifyWeatherAttention,
   describePrecipitation,
@@ -38,7 +42,6 @@ import {
   type MapTheme,
 } from "../lib/demo-config";
 import { zoomForLocation } from "../lib/geocoding";
-import { loadMapDataInBrowser } from "../lib/overpass";
 import { PLOW_STATUS_LABELS, type PlowFeedResult } from "../lib/plow-feeds";
 import {
   DEFAULT_UNITS,
@@ -193,13 +196,6 @@ function useLocationRequest<T>(
 
 // --- Formatting ---
 
-function indicatorClass(level: string): string {
-  if (level === "Elevated" || level === "High") return "indicator indicator-elevated";
-  if (level === "Moderate") return "indicator indicator-moderate";
-  if (level === "Low") return "indicator indicator-low";
-  return "indicator indicator-unknown";
-}
-
 function humanize(value: string): string {
   const spaced = value.replace(/_/g, " ");
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
@@ -225,10 +221,6 @@ function featureDisplayName(feature: EnvironmentalProperties): string {
   const subtype =
     feature.subtype && feature.subtype !== feature.kind ? humanize(feature.subtype).toLowerCase() : null;
   return `Mapped ${subtype ?? kindLabels[feature.kind]}`;
-}
-
-function formatClock(timestamp: string): string {
-  return new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
 /** Open-Meteo local time ("2026-11-07T17:00") → "5 PM" in the location's zone. */
@@ -282,53 +274,58 @@ function storeUnits(units: UnitSystem) {
 }
 let sessionUnits: UnitSystem | null = null;
 
-function subscribeNarrow(callback: () => void) {
-  const query = window.matchMedia("(max-width: 640px)");
-  query.addEventListener("change", callback);
-  return () => query.removeEventListener("change", callback);
-}
-
 // --- Small presentational pieces ---
 
-function SectionLabel({ id, children }: { id?: string; children: React.ReactNode }) {
-  return (
-    <p id={id} className="text-[0.6rem] uppercase tracking-[0.25em] text-[#3F72AF]">
-      {children}
-    </p>
-  );
+function formatClock(timestamp: string): string {
+  return new Date(timestamp).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+/** Position along a road, in one unit for a whole table (mi or km, 2 decimals). */
+function formatAlong(meters: number, units: UnitSystem): string {
+  return units === "imperial" ? `${(meters / 1609.344).toFixed(2)} mi` : `${(meters / 1000).toFixed(2)} km`;
+}
+
+function nearestFeatureLabel(nearest: { name: string | null; kind: EnvironmentalKind }): string {
+  return featureDisplayName({ featureId: "", kind: nearest.kind, name: nearest.name ?? undefined });
+}
+
+function formatCoordinates(latitude: number, longitude: number): string {
+  return `${Math.abs(latitude).toFixed(4)}° ${latitude >= 0 ? "N" : "S"}, ${Math.abs(longitude).toFixed(4)}° ${longitude >= 0 ? "E" : "W"}`;
 }
 
 function ErrorWithRetry({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
-    <div className="mt-2 text-sm" role="status">
-      <p className="text-[#8B3F3F]">{message}</p>
-      <button type="button" className="text-button mt-1" onClick={onRetry}>
+    <p className="ip-error" role="status">
+      {message}{" "}
+      <button type="button" className="text-button" onClick={onRetry}>
         Retry
       </button>
-    </div>
+    </p>
   );
 }
 
-/** Collapsible panel section: open on wide screens, closed on phones. */
-function Panel({
+/** A titled section of the information panel: heading, rule, content. */
+function Section({
   title,
-  summary,
-  narrow,
+  aside,
   children,
+  id,
 }: {
   title: string;
-  summary?: string;
-  narrow: boolean;
+  aside?: React.ReactNode;
   children: React.ReactNode;
+  id?: string;
 }) {
   return (
-    <details key={narrow ? "narrow" : "wide"} className="panel-section" open={!narrow}>
-      <summary>
-        <span className="text-[0.6rem] uppercase tracking-[0.25em] text-[#3F72AF]">{title}</span>
-        {summary && <span className="panel-summary">{summary}</span>}
-      </summary>
-      <div className="panel-body">{children}</div>
-    </details>
+    <section className="ip-section" aria-labelledby={id}>
+      <div className="ip-section-head">
+        <h2 id={id} className="ip-heading">
+          {title}
+        </h2>
+        {aside && <span className="ip-aside">{aside}</span>}
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -337,14 +334,16 @@ function SegmentedToggle<T extends string>({
   value,
   options,
   onChange,
+  className = "",
 }: {
   label: string;
   value: T;
   options: { value: T; label: string; disabled?: boolean }[];
   onChange: (value: T) => void;
+  className?: string;
 }) {
   return (
-    <div className="segmented" role="group" aria-label={label}>
+    <div className={`segmented ${className}`} role="group" aria-label={label}>
       {options.map((option) => (
         <button
           key={option.value}
@@ -361,12 +360,35 @@ function SegmentedToggle<T extends string>({
   );
 }
 
+function Swatch({ color }: { color: string }) {
+  return <span className="swatch" style={{ background: color }} aria-hidden="true" />;
+}
+
+const SENSITIVITY_DESCRIPTIONS: Record<string, string> = {
+  High: "mapped feature within 50 m",
+  Moderate: "mapped feature within 250 m",
+  Low: "no mapped feature within 250 m",
+  Unknown: "no environmental features in the loaded data",
+};
+
+const SENSITIVITY_COLORS: Record<string, string> = {
+  High: "#B3261E",
+  Moderate: "#D4890F",
+  Low: "#2E7D8C",
+  Unknown: "#A7B0BC",
+};
+
+const ATTENTION_DESCRIPTIONS: Record<string, string> = {
+  Elevated: "precipitation forecast at or below freezing",
+  Moderate: "precipitation forecast near freezing (0–3 °C)",
+  Low: "no freezing precipitation in the forecast",
+  "Insufficient data": "forecast not available",
+};
+
 export default function RoadSaltDashboard() {
   const [location, setLocation] = useState<Location>(DEFAULT_LOCATION);
   const [selectionCount, setSelectionCount] = useState(0);
   const [tileData, setTileData] = useState<MapData | null>(null);
-  const [overpass, setOverpass] = useState<Loadable<MapData> | null>(null);
-  const [overpassAttempt, setOverpassAttempt] = useState(0);
   const [selectedRoad, setSelectedRoad] = useState<RoadFeature | null>(null);
   const [visibleEnvironmentalKinds, setVisibleEnvironmentalKinds] =
     useState<EnvironmentalKind[]>(ENVIRONMENTAL_KINDS);
@@ -377,11 +399,6 @@ export default function RoadSaltDashboard() {
     subscribeUnits,
     () => sessionUnits ?? readStoredUnits(),
     () => DEFAULT_UNITS,
-  );
-  const narrow = useSyncExternalStore(
-    subscribeNarrow,
-    () => window.matchMedia("(max-width: 640px)").matches,
-    () => false,
   );
 
   const { latitude, longitude } = location;
@@ -400,24 +417,6 @@ export default function RoadSaltDashboard() {
     }),
     [locationKey, selectionCount, latitude, longitude, location],
   );
-
-  // Detailed OSM data (way ids, unnamed and service roads, tags) from Overpass.
-  useEffect(() => {
-    const controller = new AbortController();
-    loadMapDataInBrowser(latitude, longitude, controller.signal, overpassAttempt > 0)
-      .then((data) => {
-        if (!controller.signal.aborted) setOverpass({ key: locationKey, status: "ready", data });
-      })
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) return;
-        setOverpass({
-          key: locationKey,
-          status: "error",
-          error: error instanceof Error ? error.message : "OpenStreetMap detail is unavailable.",
-        });
-      });
-    return () => controller.abort();
-  }, [locationKey, latitude, longitude, overpassAttempt]);
 
   const [weatherState, retryWeather] = useLocationRequest(
     `/api/weather?${coordinateQuery}`,
@@ -450,7 +449,6 @@ export default function RoadSaltDashboard() {
     locationKey,
   );
 
-  const overpassState = overpass && overpass.key === locationKey ? overpass : null;
   const weatherData = weatherState?.status === "ready" ? weatherState.data : null;
   const observationData = observationsState?.status === "ready" ? observationsState.data : null;
   const plowFeeds = useMemo(
@@ -458,10 +456,10 @@ export default function RoadSaltDashboard() {
     [plowState],
   );
   const hasPlowFeed = plowFeeds.length > 0;
-  const colorMode: RoadColorMode = colorChoice === "plow" && !hasPlowFeed ? "type" : colorChoice;
+  const colorMode: RoadColorMode = colorChoice === "plow" && !hasPlowFeed ? "conditions" : colorChoice;
 
-  // Overpass detail wins when available; otherwise the basemap tile data.
-  const mapData: MapData | null = overpassState?.status === "ready" ? overpassState.data : tileData;
+  // Roads and environmental features read from the basemap's OSM vector tiles.
+  const mapData: MapData | null = tileData;
   const handleTileData = useCallback((data: MapData) => setTileData(data), []);
 
   const attention = classifyWeatherAttention(weatherData);
@@ -507,7 +505,7 @@ export default function RoadSaltDashboard() {
     [incidentList],
   );
 
-  // Per-road sensitivity, computed only when roads are coloured by it.
+  // Per-road colouring for the active view.
   const coloredRoads = useMemo<FeatureCollection<Geometry, RoadFeatureProperties>>(() => {
     if (!mapData) return EMPTY_ROADS;
     if (colorMode === "conditions") {
@@ -520,17 +518,8 @@ export default function RoadSaltDashboard() {
       };
     }
     if (colorMode !== "sensitivity") return mapData.roads;
-    const levels = roadSensitivityLevels(
-      mapData.roads.features,
-      mapData.environmentalFeatures.features as EnvironmentFeature[],
-    );
-    return {
-      type: "FeatureCollection",
-      features: mapData.roads.features.map((road) => ({
-        ...road,
-        properties: { ...road.properties, sensitivity: levels.get(road.properties.roadId) ?? "Unknown" },
-      })),
-    };
+    // Proximity view: every road split into 100 m pieces, each rated on its own.
+    return segmentRoads(mapData.roads.features, mapData.environmentalFeatures.features as EnvironmentFeature[]);
   }, [mapData, colorMode, baseCondition]);
 
   const plowRoutes = useMemo(() => {
@@ -555,7 +544,7 @@ export default function RoadSaltDashboard() {
     };
   }, [reportsState, units]);
 
-  // Keep the selection in sync with the active data (e.g. tiles → Overpass).
+  // Keep the selection in sync with freshly read tile data after map moves.
   const activeSelectedRoad = useMemo(() => {
     if (!selectedRoad || !mapData) return selectedRoad;
     return (
@@ -572,19 +561,29 @@ export default function RoadSaltDashboard() {
     );
   }, [mapData, activeSelectedRoad]);
 
+  // Runoff exposure along the selected road, 100 m at a time.
+  const segmentSummary = useMemo(() => {
+    if (!activeSelectedRoad || !mapData) return null;
+    const parts = prepareSensitiveParts(mapData.environmentalFeatures.features as EnvironmentFeature[]);
+    const segments = segmentRoad(activeSelectedRoad, parts);
+    return segments.length ? { segments, ...summarizeSegments(segments) } : null;
+  }, [mapData, activeSelectedRoad]);
+
   const forecasts = weatherData ? forecastHours(weatherData) : [];
   const selectedCondition = useMemo(() => {
     if (!activeSelectedRoad) return null;
     const onRoad = incidentsOnRoad(activeSelectedRoad, incidentList);
     return { ...roadConditionFor(onRoad, incidentDataLoaded, areaCaution), onRoad };
   }, [activeSelectedRoad, incidentList, incidentDataLoaded, areaCaution]);
-  const winterReports = reportsState?.status === "ready" ? reportsState.data.reports.filter((r) => r.winter) : [];
+  const winterReports = useMemo(
+    () => (reportsState?.status === "ready" ? reportsState.data.reports.filter((r) => r.winter) : []),
+    [reportsState],
+  );
 
   function selectLocation(next: Location) {
     setLocation(next);
     setSelectionCount((count) => count + 1);
     setSelectedRoad(null);
-    setOverpassAttempt(0);
   }
 
   function toggleEnvironmentalLayer(kind: EnvironmentalKind) {
@@ -593,497 +592,669 @@ export default function RoadSaltDashboard() {
     );
   }
 
-  const usingOverpass = mapData?.source === "OpenStreetMap Overpass API";
   const mapStatus = !mapData
     ? "Loading roads…"
-    : `${mapData.roads.features.length} roads · ${mapData.environmentalFeatures.features.length} features · ${
-        usingOverpass ? "OSM detail" : "OSM map tiles"
-      }`;
+    : `${mapData.roads.features.length} roads · ${mapData.environmentalFeatures.features.length} features in view`;
 
   const alertCount = observationData?.alerts?.length ?? 0;
-  const reportSummary =
-    reportsState?.status === "ready"
-      ? `${alertCount ? `${alertCount} alert${alertCount > 1 ? "s" : ""} · ` : ""}${reportsState.data.reports.length} report${reportsState.data.reports.length === 1 ? "" : "s"}`
-      : undefined;
+  const reportCount = reportsState?.status === "ready" ? reportsState.data.reports.length : null;
+
+  const [roadsVisible, setRoadsVisible] = useState(true);
+
+  // Mapped environmental features in the loaded area, by kind (real counts).
+  const featureCounts = useMemo(() => {
+    const counts = new Map<EnvironmentalKind, number>();
+    for (const feature of mapData?.environmentalFeatures.features ?? []) {
+      const kind = feature.properties.kind;
+      counts.set(kind, (counts.get(kind) ?? 0) + 1);
+    }
+    return ENVIRONMENTAL_KINDS.filter((kind) => counts.has(kind)).map((kind) => ({
+      kind,
+      count: counts.get(kind) ?? 0,
+    }));
+  }, [mapData]);
+
+  const viewOptions: { value: RoadColorMode; label: string }[] = [
+    { value: "conditions", label: "Road conditions" },
+    { value: "sensitivity", label: "Environmental proximity" },
+    ...(hasPlowFeed ? [{ value: "plow" as const, label: "Plow status" }] : []),
+  ];
+
+  const mapControls = (
+    <div className="mc-section mc-display">
+      <p className="mc-label">Road display</p>
+      <SegmentedToggle label="Road view" value={colorMode} options={viewOptions} onChange={setColorChoice} className="segmented-stack" />
+      {BASEMAP_STYLES.dark && (
+        <>
+          <p className="mc-label mt-2">Basemap</p>
+          <SegmentedToggle
+            label="Map style"
+            value={theme}
+            options={[
+              { value: "light", label: "Light" },
+              { value: "dark", label: "Dark" },
+            ]}
+            onChange={setTheme}
+          />
+        </>
+      )}
+    </div>
+  );
+
+  const observation = observationsState?.status === "ready" ? observationsState.data : null;
+
+  // Everything RoadSalt knows about the selected road, for the Gemini suggestion.
+  // Metric throughout; only real loaded values (null when missing).
+  const adviceContext = useMemo<AdviceContext | null>(() => {
+    if (!activeSelectedRoad || !selectedCondition) return null;
+    const hours = weatherData?.hourly ?? [];
+    const sum = (values: number[]) => (values.length ? values.reduce((a, b) => a + b, 0) : null);
+    return {
+      roadId: activeSelectedRoad.properties.roadId,
+      road: {
+        name: roadDisplayName(activeSelectedRoad.properties),
+        classification: humanize(activeSelectedRoad.properties.classification),
+        ref: activeSelectedRoad.properties.ref ?? null,
+      },
+      location: {
+        name: location.name,
+        displayName: location.displayName,
+        latitude,
+        longitude,
+        timezone: weatherData?.timezone ?? null,
+      },
+      condition: {
+        label: CONDITION_LABELS[selectedCondition.condition],
+        reason: selectedCondition.reason,
+        incidents: selectedCondition.onRoad.map((incident) => incident.description),
+      },
+      environment: {
+        level: environmentalAssessment?.level ?? "Unknown",
+        features: (environmentalAssessment?.nearbyFeatures ?? []).slice(0, 8).map((item) => ({
+          name: featureDisplayName(item.feature),
+          distanceMeters: item.distanceMeters,
+        })),
+        segments: segmentSummary
+          ? {
+              count: segmentSummary.count,
+              totalMeters: segmentSummary.totalMeters,
+              high: segmentSummary.counts.High,
+              moderate: segmentSummary.counts.Moderate,
+              low: segmentSummary.counts.Low,
+              stretches: segmentSummary.stretches.slice(0, 6).map(
+                (stretch) =>
+                  `${Math.round(stretch.startMeters)}–${Math.round(stretch.endMeters)} m along the road: ${stretch.level}${stretch.nearestFeature ? `, ${nearestFeatureLabel(stretch.nearestFeature)} ${Math.round(stretch.nearestFeature.distanceMeters)} m away` : ""}`,
+              ),
+            }
+          : null,
+      },
+      weather: {
+        description: weatherData ? describeWeatherCode(weatherData.current.weatherCode) : null,
+        temperatureC: weatherData?.current.temperature ?? null,
+        apparentC: weatherData?.current.apparentTemperature ?? null,
+        windKmh: weatherData?.current.windSpeed ?? null,
+        attention,
+        next24h: {
+          minC: hours.length ? Math.min(...hours.map((hour) => hour.temperature)) : null,
+          maxC: hours.length ? Math.max(...hours.map((hour) => hour.temperature)) : null,
+          maxPrecipChance: hours.length ? Math.max(...hours.map((hour) => hour.precipitationProbability)) : null,
+          totalPrecipMm: sum(hours.map((hour) => hour.precipitation)),
+          totalSnowCm: sum(hours.map((hour) => hour.snowfall)),
+          hoursAtOrBelowFreezing: hours.length ? hours.filter((hour) => hour.temperature <= 0).length : null,
+        },
+      },
+      observation:
+        observation?.observation && observation.stationId
+          ? {
+              stationId: observation.stationId,
+              temperatureC: observation.observation.temperatureC,
+              time: observation.observation.timestamp,
+            }
+          : null,
+      alerts: (observationData?.alerts ?? []).map((alert) => alert.event),
+      stormReports: winterReports
+        .slice(0, 6)
+        .map((report) => `${humanize(report.type.toLowerCase())}${reportMagnitude(report.magnitude, report.unit, "metric")} at ${report.location}, ${report.time}`),
+    };
+  }, [activeSelectedRoad, selectedCondition, environmentalAssessment, segmentSummary, weatherData, observation, observationData, attention, winterReports, location, latitude, longitude]);
+  const adviceReady =
+    Boolean(adviceContext) &&
+    weatherState !== null && weatherState.status !== "loading" &&
+    incidentsState !== null && incidentsState.status !== "loading" &&
+    observationsState !== null && observationsState.status !== "loading";
 
   return (
-    <div className="min-h-screen bg-[#F9F7F7] text-[#112D4E]">
-      <header className="border-b border-[#DBE2EF] bg-[#F9F7F7]">
-        <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-x-5 gap-y-2 px-4 py-3 md:px-8">
-          <div className="min-w-0">
-            <p className="text-[0.6rem] font-semibold uppercase tracking-[0.3em] text-[#3F72AF]">RoadSalt</p>
-            <p className="mt-0.5 truncate text-sm font-medium" title={location.displayName}>
-              {location.name}
-            </p>
-          </div>
-
-          <div className="ml-auto flex items-center gap-3 md:order-last">
-            <SegmentedToggle
-              label="Temperature units"
-              value={units}
-              options={[
-                { value: "imperial", label: "°F" },
-                { value: "metric", label: "°C" },
-              ]}
-              onChange={storeUnits}
-            />
-            <span className={indicatorClass(attention)} title="Weather attention (forecast, not road ice)">
-              {attention}
-            </span>
-          </div>
-
-          <div className="w-full md:w-auto md:flex-1 md:max-w-xl">
-            <LocationSearch bias={{ latitude, longitude }} onSelect={selectLocation} />
-          </div>
+    <div className="app-shell">
+      <header className="app-header">
+        <div className="brand">
+          <Image className="brand-mark" src="/assets/favicon.png" alt="" width={30} height={30} priority />
+          <span className="wordmark">RoadSalt</span>
         </div>
+        <div className="header-location" title={location.displayName}>
+          <span className="header-location-label">Location</span>
+          <span className="header-location-name">{location.displayName}</span>
+        </div>
+        <div className="header-search">
+          <LocationSearch bias={{ latitude, longitude }} onSelect={selectLocation} />
+        </div>
+        <SegmentedToggle
+          label="Temperature units"
+          value={units}
+          className="header-units"
+          options={[
+            { value: "imperial", label: "°F" },
+            { value: "metric", label: "°C" },
+          ]}
+          onChange={storeUnits}
+        />
       </header>
 
-      <main className="mx-auto max-w-[1500px] px-0 py-0 md:px-6 md:py-5">
-        <div className="grid gap-4 xl:grid-cols-[2.2fr_1fr]">
-          <section className="overflow-hidden border-[#112D4E] bg-[#DBE2EF]/40 md:border">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#112D4E]/20 bg-[#F9F7F7] px-4 py-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="text-xs" htmlFor="road-color-mode">
-                  Color roads by
-                </label>
-                <select
-                  id="road-color-mode"
-                  className="map-select"
-                  value={colorMode}
-                  onChange={(event) => setColorChoice(event.target.value as RoadColorMode)}
-                >
-                  <option value="conditions">Road conditions</option>
-                  <option value="type">Road type</option>
-                  <option value="sensitivity">Nearby water, wetland &amp; farmland</option>
-                  <option value="plow" disabled={!hasPlowFeed}>
-                    {hasPlowFeed ? "Agency plow status" : "Agency plow status (none here)"}
-                  </option>
-                </select>
-                {BASEMAP_STYLES.dark && (
-                  <SegmentedToggle
-                    label="Map style"
-                    value={theme}
-                    options={[
-                      { value: "dark", label: "Dark" },
-                      { value: "light", label: "Light" },
-                    ]}
-                    onChange={setTheme}
-                  />
-                )}
-              </div>
-              <div className="flex flex-col items-end">
-                <p className="map-data-status" role="status">{mapStatus}</p>
-                {!narrow && (!overpassState || overpassState.status === "loading") && mapData && (
-                  <p className="map-data-status">Loading detailed OSM data…</p>
-                )}
-                {overpassState?.status === "error" && (
-                  <p className="map-data-status">
-                    {narrow ? "OSM detail unavailable" : `Detailed OSM data unavailable (${overpassState.error})`}{" "}
-                    <button
-                      type="button"
-                      className="text-button"
-                      onClick={() => {
-                        setOverpass({ key: locationKey, status: "loading" });
-                        setOverpassAttempt((attempt) => attempt + 1);
-                      }}
-                    >
-                      Retry
-                    </button>
-                  </p>
-                )}
-              </div>
+      <main className="workspace">
+        <section className="map-area" aria-label="Road map">
+          {colorMode === "conditions" ? (
+            <div className="map-statusbar condition-banner" role="status">
+              <Swatch color={CONDITION_COLORS[conditionSummary.tone]} />
+              <p className="condition-headline">{conditionSummary.headline}</p>
+              {conditionSummary.detail && <p className="statusbar-detail">{conditionSummary.detail}</p>}
+              {incidentsState?.status === "error" && (
+                <button type="button" className="text-button" onClick={retryIncidents}>
+                  Retry
+                </button>
+              )}
             </div>
-
-            {colorMode === "conditions" && (
-              <div
-                className="condition-banner"
-                style={{ borderLeftColor: CONDITION_COLORS[conditionSummary.tone] }}
-                role="status"
-              >
-                <span
-                  className="condition-dot"
-                  style={{ background: CONDITION_COLORS[conditionSummary.tone] }}
-                  aria-hidden="true"
-                />
-                <div className="min-w-0">
-                  <p className="condition-headline">{conditionSummary.headline}</p>
-                  {conditionSummary.detail && <p className="condition-detail">{conditionSummary.detail}</p>}
-                </div>
-                {incidentsState?.status === "error" && (
-                  <button type="button" className="text-button ml-auto" onClick={retryIncidents}>
-                    Retry
-                  </button>
-                )}
-              </div>
-            )}
-
-            <div className="map-frame bg-[#2A2A2A]">
-              <MapCanvas
-                focus={focus}
-                theme={theme}
-                roadColorMode={colorMode}
-                roads={coloredRoads}
-                environmentalFeatures={mapData?.environmentalFeatures ?? EMPTY_ENVIRONMENT}
-                plowRoutes={colorMode === "plow" ? plowRoutes : undefined}
-                reportPoints={reportPoints}
-                incidents={incidentFeatures}
-                selectedRoadId={activeSelectedRoad?.properties.roadId ?? null}
-                visibleEnvironmentalKinds={visibleEnvironmentalKinds}
-                onEnvironmentalVisibilityChange={toggleEnvironmentalLayer}
-                onRoadSelect={setSelectedRoad}
-                onTileData={handleTileData}
-              />
+          ) : colorMode === "sensitivity" ? (
+            <div className="map-statusbar" role="status">
+              <p className="condition-headline">Distance from each road to the nearest mapped waterway, water body, wetland or farmland.</p>
+              <p className="statusbar-detail">OpenStreetMap features only. Proximity is not evidence of runoff.</p>
             </div>
-          </section>
+          ) : (
+            <div className="map-statusbar" role="status">
+              <p className="condition-headline">Plow and treatment status from {plowFeeds.map((feed) => feed.feed.agency).join(", ")}.</p>
+              <p className="statusbar-detail">Status older than 48 hours is shown as outdated.</p>
+            </div>
+          )}
 
-          <aside className="space-y-4 bg-[#F9F7F7] p-4 md:border md:border-[#112D4E]">
-            {/* Road details first: it is what the user just clicked. */}
-            <section className="border-b border-[#DBE2EF] pb-4" aria-labelledby="road-heading">
-              <SectionLabel>Road details</SectionLabel>
-              <h3 id="road-heading" className="mt-1 text-xl font-semibold md:text-2xl">
-                {activeSelectedRoad ? roadDisplayName(activeSelectedRoad.properties) : "Tap a road on the map"}
-              </h3>
+          <div className="map-frame">
+            <MapCanvas
+              focus={focus}
+              theme={theme}
+              roadColorMode={colorMode}
+              roads={coloredRoads}
+              environmentalFeatures={mapData?.environmentalFeatures ?? EMPTY_ENVIRONMENT}
+              plowRoutes={colorMode === "plow" ? plowRoutes : undefined}
+              reportPoints={reportPoints}
+              incidents={incidentFeatures}
+              selectedRoadId={activeSelectedRoad?.properties.roadId ?? null}
+              visibleEnvironmentalKinds={visibleEnvironmentalKinds}
+              onEnvironmentalVisibilityChange={toggleEnvironmentalLayer}
+              roadsVisible={roadsVisible}
+              onRoadsVisibleChange={setRoadsVisible}
+              controls={mapControls}
+              onRoadSelect={setSelectedRoad}
+              onTileData={handleTileData}
+            />
+          </div>
+        </section>
 
-              {activeSelectedRoad ? (
-                <div className="mt-3 space-y-4 text-sm">
-                  {selectedCondition && (
-                    <div
-                      className="condition-card"
-                      style={{ borderLeftColor: CONDITION_COLORS[selectedCondition.condition] }}
-                    >
-                      <p className="detail-label">Current condition</p>
-                      <p className="mt-1 flex items-center gap-2 text-base font-semibold">
-                        <span
-                          className="condition-dot"
-                          style={{ background: CONDITION_COLORS[selectedCondition.condition] }}
-                          aria-hidden="true"
-                        />
-                        {CONDITION_LABELS[selectedCondition.condition]}
-                      </p>
-                      <p className="mt-1">{selectedCondition.reason}</p>
-                      {selectedCondition.onRoad.length > 1 && (
-                        <ul className="mt-1 list-disc pl-5 text-xs">
-                          {selectedCondition.onRoad.slice(1, 4).map((incident) => (
-                            <li key={incident.id}>{incident.description}</li>
-                          ))}
-                        </ul>
-                      )}
-                      <p className="mt-1 text-xs text-[#53677D]">
-                        {selectedCondition.onRoad.length > 0 || incidentDataLoaded
-                          ? "Reports: TomTom Traffic, NWS. "
-                          : ""}
-                        Not a measurement of the road surface.
-                      </p>
-                    </div>
-                  )}
-                  <div>
-                    <p className="detail-label">Road attributes · OpenStreetMap</p>
-                    <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1">
-                      <dt className="text-[#53677D]">Classification</dt>
-                      <dd>{humanize(activeSelectedRoad.properties.classification)}</dd>
-                      {activeSelectedRoad.properties.ref && (
-                        <>
-                          <dt className="text-[#53677D]">Route ref</dt>
-                          <dd>{activeSelectedRoad.properties.ref}</dd>
-                        </>
-                      )}
-                      {!narrow &&
-                        Object.entries(activeSelectedRoad.properties.tags ?? {})
-                          .filter(([key]) => !["highway", "name", "ref"].includes(key))
-                          .map(([key, value]) => (
-                            <div key={key} className="contents">
-                              <dt className="text-[#53677D]">{humanize(key)}</dt>
-                              <dd>{humanize(value)}</dd>
-                            </div>
-                          ))}
-                      <dt className="text-[#53677D]">OSM way</dt>
-                      <dd>
-                        {activeSelectedRoad.properties.osmId ? (
-                          <a
-                            className="underline"
-                            href={`https://www.openstreetmap.org/way/${activeSelectedRoad.properties.osmId}`}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            {activeSelectedRoad.properties.osmId}
-                          </a>
-                        ) : (
-                          "Not available from map tiles"
-                        )}
-                      </dd>
-                    </dl>
-                  </div>
-
-                  <div className="border-t border-[#DBE2EF] pt-3">
-                    <p className="detail-label">Nearby mapped environmental features</p>
-                    {environmentalAssessment ? (
-                      <>
-                        <span className={`mt-1 inline-block ${indicatorClass(environmentalAssessment.level)}`}>
-                          {environmentalAssessment.level} sensitivity
-                        </span>
-                        <p className="mt-2">
-                          Nearest water, wetland or farmland:{" "}
-                          {environmentalAssessment.nearestDistanceMeters === null
-                            ? "none in the loaded data"
-                            : formatDistance(environmentalAssessment.nearestDistanceMeters, units)}
-                        </p>
-                        {environmentalAssessment.nearbyFeatures.length > 0 ? (
-                          <ul className="mt-2 list-disc space-y-1 pl-5">
-                            {environmentalAssessment.nearbyFeatures.slice(0, narrow ? 4 : 8).map((item) => (
-                              <li key={item.feature.featureId}>
-                                {featureDisplayName(item.feature)} · {formatDistance(item.distanceMeters, units)}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p className="mt-2">
-                            {environmentalAssessment.level === "Unknown"
-                              ? "No mapped sensitive feature found in the loaded data."
-                              : `No mapped sensitive feature within ${formatDistance(250, units)}.`}
-                          </p>
-                        )}
-                        <p className="mt-2 text-xs leading-5 text-[#53677D]">
-                          Approximate, along the road&apos;s loaded length. Forests are listed but don&apos;t set the
-                          level. Proximity does not prove runoff; missing features don&apos;t mean safe.
-                        </p>
-                      </>
-                    ) : (
-                      <p className="mt-1">Unknown</p>
-                    )}
-                  </div>
-
-                  <div className="border-t border-[#DBE2EF] pt-3">
-                    <p className="detail-label">Local weather · not road-specific</p>
-                    <p className="mt-1 leading-5">
-                      {weatherData
-                        ? `${describeWeatherCode(weatherData.current.weatherCode)}, ${formatTemperature(weatherData.current.temperature, units)} air temperature.`
-                        : "Weather for this location is not available."}{" "}
-                      Air temperature cannot confirm whether this road is icy.
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <p className="mt-2 text-sm leading-6">
-                  Tap a road to see its OpenStreetMap details, nearby water, wetlands, farmland and forest, and local
-                  weather. Search above to explore anywhere in the US.
-                </p>
-              )}
-            </section>
-
-            <Panel
-              title="Local reports"
-              summary={reportSummary}
-              narrow={narrow}
-            >
-              {observationData?.alerts && observationData.alerts.length > 0 && (
-                <div className="mb-3 border border-[#8B3F3F] p-2 text-sm" role="alert">
-                  <p className="font-semibold text-[#8B3F3F]">
-                    Active NWS alert{observationData.alerts.length > 1 ? "s" : ""}
-                  </p>
-                  <ul className="mt-1 space-y-1">
-                    {observationData.alerts.map((alert) => (
-                      <li key={alert.id}>
-                        <span className="font-medium">{alert.event}</span>
-                        {alert.severity ? ` · ${alert.severity}` : ""} · until {formatDateTime(alert.ends)}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {observationData?.alerts?.length === 0 && (
-                <p className="text-sm">No active NWS alerts for this location.</p>
-              )}
-
-              <p className="detail-label mt-3">Storm reports · last 72 h within 50 mi</p>
-              {!reportsState || reportsState.status === "loading" ? (
-                <p className="mt-1 text-sm" role="status">Loading reports…</p>
-              ) : reportsState.status === "error" ? (
-                <ErrorWithRetry message={reportsState.error} onRetry={retryReports} />
-              ) : reportsState.data.reports.length === 0 ? (
-                <p className="mt-1 text-sm">
-                  No reports from NWS {reportsState.data.office} near here in the last 72 hours.
-                </p>
-              ) : (
-                <ul className="mt-1 space-y-2 text-sm">
-                  {[...winterReports, ...reportsState.data.reports.filter((r) => !r.winter)]
-                    .slice(0, narrow ? 4 : 10)
-                    .map((report) => (
-                      <li key={report.id} className={report.winter ? "report report-winter" : "report"}>
-                        <span className="font-medium">
-                          {humanize(report.type.toLowerCase())}
-                          {reportMagnitude(report.magnitude, report.unit, units)}
-                        </span>
-                        <span className="block text-xs text-[#53677D]">
-                          {report.location} · {formatDateTime(report.time)}
-                          {report.source ? ` · ${report.source}` : ""}
-                        </span>
-                        {!narrow && report.remark && <span className="block text-xs">{report.remark}</span>}
-                      </li>
-                    ))}
-                </ul>
-              )}
-
-              <p className="detail-label mt-3">Agency plow status</p>
-              {!plowState || plowState.status === "loading" ? (
-                <p className="mt-1 text-sm">Checking for a local plow-status feed…</p>
-              ) : plowState.status === "error" ? (
-                <ErrorWithRetry message={plowState.error} onRetry={retryPlow} />
-              ) : plowFeeds.length === 0 ? (
-                <p className="mt-1 text-sm">
-                  No public plow-status feed is connected for this area. Plow status is published by some local
-                  agencies; check your county or state DOT.
-                </p>
-              ) : (
-                plowFeeds.map((feed) => (
-                  <div key={feed.feed.id} className="mt-1 text-sm">
-                    <p className="font-medium">{feed.feed.agency}</p>
-                    <p className="text-xs text-[#53677D]">
-                      {feed.routes.features.length} route segments ·{" "}
-                      {(Object.keys(feed.counts) as (keyof typeof feed.counts)[])
-                        .filter((category) => feed.counts[category] > 0)
-                        .map((category) => `${feed.counts[category]} ${PLOW_STATUS_LABELS[category].toLowerCase()}`)
-                        .join(", ")}
-                    </p>
-                    <p className={feed.allStale ? "mt-1 text-xs text-[#8B3F3F]" : "mt-1 text-xs"}>
-                      {feed.newestUpdate
-                        ? `Last updated ${formatDate(feed.newestUpdate)}${feed.allStale ? " — outdated; not current road conditions" : ""}.`
-                        : "No update time provided."}{" "}
-                      <a className="underline" href={feed.feed.publicMapUrl} target="_blank" rel="noreferrer">
-                        Agency map
-                      </a>
-                    </p>
-                    {colorMode !== "plow" && (
-                      <button type="button" className="text-button mt-1" onClick={() => setColorChoice("plow")}>
-                        Show on map
-                      </button>
-                    )}
-                  </div>
-                ))
-              )}
-              {plowState?.status === "ready" &&
-                plowState.data.errors.map((error) => (
-                  <p key={error.feedId} className="mt-1 text-xs text-[#8B3F3F]">
-                    {error.message}
-                  </p>
-                ))}
-            </Panel>
-
-            <Panel
-              title="Current conditions"
-              summary={
-                weatherData
-                  ? `${formatTemperature(weatherData.current.temperature, units)} · ${describeWeatherCode(weatherData.current.weatherCode)}`
-                  : undefined
-              }
-              narrow={narrow}
-            >
-              {!weatherState || weatherState.status === "loading" ? (
-                <p className="text-sm" role="status">Loading weather…</p>
-              ) : weatherState.status === "error" ? (
-                <ErrorWithRetry message={weatherState.error} onRetry={retryWeather} />
-              ) : (
-                <div className="text-sm">
-                  <p className="font-medium">
-                    {describeWeatherCode(weatherState.data.current.weatherCode)} ·{" "}
-                    {formatTemperature(weatherState.data.current.temperature, units, 1)}
-                    <span className="ml-1 text-xs font-normal text-[#53677D]">Open-Meteo model</span>
-                  </p>
-                  <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                    <dt className="detail-label">Feels like</dt>
-                    <dd>{formatTemperature(weatherState.data.current.apparentTemperature, units)}</dd>
-                    <dt className="detail-label">Humidity</dt>
-                    <dd>
-                      {weatherState.data.current.relativeHumidity === null
-                        ? "Not reported"
-                        : `${weatherState.data.current.relativeHumidity.toFixed(0)} %`}
-                    </dd>
-                    <dt className="detail-label">Wind</dt>
-                    <dd>{formatSpeed(weatherState.data.current.windSpeed, units)}</dd>
-                    <dt className="detail-label">Precipitation</dt>
-                    <dd>
-                      {formatPrecipitation(weatherState.data.current.precipitation, units)} ·{" "}
-                      {describePrecipitation(weatherState.data)}
-                    </dd>
-                  </dl>
-
-                  {observationsState?.status === "ready" && observationsState.data.observation && (
-                    <div className="mt-3 border-t border-[#DBE2EF] pt-2">
-                      <p className="font-medium">
-                        {observationsState.data.observation.description ?? "Observed"} ·{" "}
-                        {formatTemperature(observationsState.data.observation.temperatureC, units, 1)}
-                        <span className="ml-1 text-xs font-normal text-[#53677D]">measured</span>
-                      </p>
-                      <dl className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                        <dt className="detail-label">Dew point</dt>
-                        <dd>{formatTemperature(observationsState.data.observation.dewpointC, units)}</dd>
-                        <dt className="detail-label">Wind</dt>
-                        <dd>{formatSpeed(observationsState.data.observation.windSpeedKmh, units)}</dd>
-                        <dt className="detail-label">Visibility</dt>
-                        <dd>{formatVisibility(observationsState.data.observation.visibilityM, units)}</dd>
-                        <dt className="detail-label">Precip. last hour</dt>
-                        <dd>{formatPrecipitation(observationsState.data.observation.precipitationLastHourMm, units)}</dd>
-                      </dl>
-                      <p className="mt-1 text-xs leading-5 text-[#53677D]">
-                        NWS station {observationsState.data.stationId}
-                        {observationsState.data.stationName ? ` (${observationsState.data.stationName})` : ""},{" "}
-                        {formatDateTime(observationsState.data.observation.timestamp)}
-                        {observationsState.data.observationStale ? " — older than 2 hours" : ""}
-                        . Station air readings, not road surface.
-                      </p>
-                    </div>
-                  )}
-                  {observationsState?.status === "error" && (
-                    <p className="mt-2 text-xs text-[#53677D]">
-                      Measured observations: {observationsState.error}{" "}
-                      <button type="button" className="text-button" onClick={retryObservations}>
-                        Retry
-                      </button>
-                    </p>
-                  )}
-                </div>
-              )}
-            </Panel>
-
-            <Panel
-              title={`Forecast · next 24 h${weatherData ? ` · ${weatherData.timezone.replace(/_/g, " ")}` : ""}`}
-              narrow={narrow}
-            >
-              {!weatherState || weatherState.status === "loading" ? (
-                <p className="text-sm">Loading forecast…</p>
-              ) : weatherState.status === "error" ? (
-                <p className="text-sm text-[#8B3F3F]">Forecast unavailable.</p>
-              ) : forecasts.length === 0 ? (
-                <p className="text-sm">No forecast hours were returned.</p>
-              ) : (
+        <aside className="info-panel" aria-label="Location and road information">
+          <Section title="Selected location" id="location-heading">
+            <p className="place-name">{location.name}</p>
+            <dl className="facts">
+              <dt>Address</dt>
+              <dd>{location.displayName}</dd>
+              <dt>Coordinates</dt>
+              <dd className="tabular">{formatCoordinates(latitude, longitude)}</dd>
+              {observation && (
                 <>
-                  <div className="forecast-strip">
-                    {forecasts.map((hour) => (
-                      <div key={hour.time} className="forecast-hour">
-                        <span className="forecast-time">{formatLocalHour(hour.time)}</span>
-                        <span className="forecast-temperature">{shortTemperature(hour.temperature, units)}</span>
-                        <span>{hour.precipitationProbability}%</span>
-                        <span className="forecast-caption">
-                          {hour.snowfall >= 0.1
-                            ? formatSnowfall(hour.snowfall, units)
-                            : formatPrecipitation(hour.precipitation, units)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="mt-2 text-xs leading-5 text-[#53677D]">
-                    Every third hour. Air temperature, not pavement temperature; it cannot confirm ice. Fetched{" "}
-                    {formatClock(weatherState.data.updatedAt)}.
-                  </p>
+                  <dt>NWS station</dt>
+                  <dd>
+                    {observation.stationId}
+                    {observation.stationName ? ` · ${observation.stationName}` : ""}
+                  </dd>
                 </>
               )}
-            </Panel>
+              {weatherData && (
+                <>
+                  <dt>Time zone</dt>
+                  <dd>{weatherData.timezone.replace(/_/g, " ")}</dd>
+                </>
+              )}
+            </dl>
+          </Section>
 
-            <p className="text-xs leading-5 text-[#53677D]">
-              Sources: © OpenStreetMap contributors · Open-Meteo · National Weather Service · Iowa Environmental
-              Mesonet{hasPlowFeed ? " · local agency plow feeds" : ""}. For awareness, not treatment instructions.
+          {observationData?.alerts && observationData.alerts.length > 0 && (
+            <div className="alert-box" role="alert">
+              <p className="alert-title">Active NWS alert{observationData.alerts.length > 1 ? "s" : ""}</p>
+              <ul>
+                {observationData.alerts.map((alert) => (
+                  <li key={alert.id}>
+                    {alert.event}
+                    {alert.severity ? ` (${alert.severity})` : ""}, until {formatDateTime(alert.ends)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <Section
+            title="Selected road"
+            aside={
+              activeSelectedRoad ? (
+                <button type="button" className="text-button" aria-label="Clear road selection" onClick={() => setSelectedRoad(null)}>
+                  Clear
+                </button>
+              ) : undefined
+            }
+          >
+            {activeSelectedRoad ? (
+              <>
+                <h3 id="road-heading" className="road-name">
+                  {roadDisplayName(activeSelectedRoad.properties)}
+                </h3>
+                <dl className="facts">
+                  <dt>Road classification</dt>
+                  <dd>{humanize(activeSelectedRoad.properties.classification)}</dd>
+                  {activeSelectedRoad.properties.ref && (
+                    <>
+                      <dt>Route</dt>
+                      <dd>{activeSelectedRoad.properties.ref}</dd>
+                    </>
+                  )}
+                  {selectedCondition && (
+                    <>
+                      <dt>Reported condition</dt>
+                      <dd className="condition-card">
+                        <span className="status-line">
+                          <Swatch color={CONDITION_COLORS[selectedCondition.condition]} />
+                          {CONDITION_LABELS[selectedCondition.condition]}
+                        </span>
+                        <span className="dd-note">{selectedCondition.reason}</span>
+                        {selectedCondition.onRoad.length > 1 && (
+                          <span className="dd-note">
+                            Also: {selectedCondition.onRoad.slice(1, 4).map((incident) => incident.description).join("; ")}
+                          </span>
+                        )}
+                      </dd>
+                    </>
+                  )}
+                  {segmentSummary && (
+                    <>
+                      <dt>Loaded length</dt>
+                      <dd className="tabular">{formatDistance(segmentSummary.totalMeters, units)}</dd>
+                    </>
+                  )}
+                </dl>
+                <p className="fine-print">
+                  Condition from TomTom Traffic incidents and NWS alerts. Not a measurement of the road surface; air
+                  temperature cannot confirm ice.
+                </p>
+                {adviceContext && <RoadAdvice context={adviceContext} ready={adviceReady} />}
+              </>
+            ) : (
+              <p className="empty-state">
+                No road selected. Select a road on the map to view its classification, reported condition and nearby
+                mapped environmental features.
+              </p>
+            )}
+          </Section>
+
+          <Section title="Nearby environmental features">
+            {activeSelectedRoad ? (
+              environmentalAssessment ? (
+                <>
+                  <p className="status-line">
+                    <Swatch color={SENSITIVITY_COLORS[environmentalAssessment.level]} />
+                    <span>
+                      <strong>{environmentalAssessment.level} sensitivity</strong>
+                      <span className="muted">: {SENSITIVITY_DESCRIPTIONS[environmentalAssessment.level]}</span>
+                    </span>
+                  </p>
+                  {segmentSummary && (
+                    <div className="segment-breakdown">
+                      <p className="ip-subheading">
+                        Runoff exposure in 100 m segments ({segmentSummary.count})
+                      </p>
+                      <div
+                        className="segment-strip"
+                        role="img"
+                        aria-label={`${segmentSummary.counts.High} high, ${segmentSummary.counts.Moderate} moderate, ${segmentSummary.counts.Low} low exposure segments`}
+                      >
+                        {segmentSummary.segments.map((segment) => (
+                          <span
+                            key={segment.properties.segmentId}
+                            className="segment-cell"
+                            style={{ background: SENSITIVITY_COLORS[segment.properties.sensitivity] }}
+                            title={`${formatAlong(segment.properties.startMeters, units)}–${formatAlong(segment.properties.endMeters, units)}: ${segment.properties.sensitivity}${segment.properties.nearestFeature ? `, ${nearestFeatureLabel(segment.properties.nearestFeature)} ${formatDistance(segment.properties.nearestFeature.distanceMeters, units)}` : ""}`}
+                          />
+                        ))}
+                      </div>
+                      <p className="segment-axis">
+                        <span>One end</span>
+                        <span>{formatDistance(segmentSummary.totalMeters, units)}</span>
+                      </p>
+                      <p className="segment-counts">
+                        {(["High", "Moderate", "Low", "Unknown"] as const)
+                          .filter((level) => segmentSummary.counts[level] > 0)
+                          .map((level) => (
+                            <span key={level}>
+                              <Swatch color={SENSITIVITY_COLORS[level]} /> {level} {segmentSummary.counts[level]}
+                            </span>
+                          ))}
+                      </p>
+                      {segmentSummary.stretches.length > 0 && (
+                        <table className="data-table">
+                          <thead>
+                            <tr>
+                              <th scope="col">Stretch</th>
+                              <th scope="col">Exposure</th>
+                              <th scope="col" className="num">
+                                Nearest feature
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {segmentSummary.stretches.slice(0, 6).map((stretch) => (
+                              <tr key={`${stretch.startMeters}`}>
+                                <td className="tabular">
+                                  {formatAlong(stretch.startMeters, units)}–{formatAlong(stretch.endMeters, units)}
+                                </td>
+                                <td>{stretch.level}</td>
+                                <td className="num">
+                                  {stretch.nearestFeature
+                                    ? `${nearestFeatureLabel(stretch.nearestFeature)}, ${formatDistance(stretch.nearestFeature.distanceMeters, units)}`
+                                    : "—"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  )}
+                  {environmentalAssessment.nearbyFeatures.length > 0 ? (
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th scope="col">Feature</th>
+                          <th scope="col" className="num">
+                            Distance
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {environmentalAssessment.nearbyFeatures.slice(0, 8).map((item) => (
+                          <tr key={item.feature.featureId}>
+                            <td>{featureDisplayName(item.feature)}</td>
+                            <td className="num">{formatDistance(item.distanceMeters, units)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <p className="empty-state">
+                      {environmentalAssessment.level === "Unknown"
+                        ? "No mapped sensitive feature found in the loaded data."
+                        : `No mapped sensitive feature within ${formatDistance(250, units)}.`}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="empty-state">Environmental data is not loaded for this road.</p>
+              )
+            ) : featureCounts.length > 0 ? (
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Mapped in the loaded area</th>
+                    <th scope="col" className="num">
+                      Features
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {featureCounts.map(({ kind, count }) => (
+                    <tr key={kind}>
+                      <td>{ENVIRONMENTAL_KIND_LABELS[kind]}</td>
+                      <td className="num">{count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="empty-state">{mapData ? "No environmental features mapped in the loaded area." : "Loading map features…"}</p>
+            )}
+            <p className="fine-print">
+              Distances are approximate, measured along the road&apos;s loaded length to OpenStreetMap features.
+              Proximity does not prove runoff, and unmapped areas are not necessarily free of sensitive features.
             </p>
-          </aside>
-        </div>
+          </Section>
+
+          <Section
+            title="Current weather conditions"
+            aside={weatherData ? `Retrieved ${formatClock(weatherData.updatedAt)}` : undefined}
+          >
+            {!weatherState || weatherState.status === "loading" ? (
+              <p className="empty-state" role="status">Loading weather…</p>
+            ) : weatherState.status === "error" ? (
+              <ErrorWithRetry message={weatherState.error} onRetry={retryWeather} />
+            ) : (
+              <dl className="facts">
+                <dt>Conditions</dt>
+                <dd>{describeWeatherCode(weatherState.data.current.weatherCode)}</dd>
+                <dt>Air temperature</dt>
+                <dd className="tabular">{formatTemperature(weatherState.data.current.temperature, units, 1)}</dd>
+                <dt>Feels like</dt>
+                <dd className="tabular">{formatTemperature(weatherState.data.current.apparentTemperature, units)}</dd>
+                <dt>Humidity</dt>
+                <dd className="tabular">
+                  {weatherState.data.current.relativeHumidity === null
+                    ? "Not reported"
+                    : `${weatherState.data.current.relativeHumidity.toFixed(0)} %`}
+                </dd>
+                <dt>Wind</dt>
+                <dd className="tabular">{formatSpeed(weatherState.data.current.windSpeed, units)}</dd>
+                <dt>Precipitation</dt>
+                <dd>
+                  {formatPrecipitation(weatherState.data.current.precipitation, units)} · {describePrecipitation(weatherState.data)}
+                </dd>
+                <dt>Winter weather attention</dt>
+                <dd>
+                  <strong>{attention}</strong>
+                  <span className="dd-note">{ATTENTION_DESCRIPTIONS[attention]}</span>
+                </dd>
+              </dl>
+            )}
+            {observation?.observation && (
+              <>
+                <p className="ip-subheading">
+                  Observed at {observation.stationId}, {formatDateTime(observation.observation.timestamp)}
+                  {observation.observationStale ? " (older than 2 hours)" : ""}
+                </p>
+                <dl className="facts">
+                  <dt>Air temperature</dt>
+                  <dd className="tabular">{formatTemperature(observation.observation.temperatureC, units, 1)}</dd>
+                  <dt>Dew point</dt>
+                  <dd className="tabular">{formatTemperature(observation.observation.dewpointC, units)}</dd>
+                  <dt>Wind</dt>
+                  <dd className="tabular">{formatSpeed(observation.observation.windSpeedKmh, units)}</dd>
+                  <dt>Visibility</dt>
+                  <dd className="tabular">{formatVisibility(observation.observation.visibilityM, units)}</dd>
+                </dl>
+              </>
+            )}
+            {observationsState?.status === "error" && (
+              <p className="fine-print">
+                Measured observations: {observationsState.error}{" "}
+                <button type="button" className="text-button" onClick={retryObservations}>
+                  Retry
+                </button>
+              </p>
+            )}
+            <p className="fine-print">Open-Meteo model values and NWS station readings describe the air, not the road surface.</p>
+          </Section>
+
+          <Section title="24-hour forecast" aside={weatherData ? "Every 3 hours, local time" : undefined}>
+            {!weatherState || weatherState.status === "loading" ? (
+              <p className="empty-state">Loading forecast…</p>
+            ) : weatherState.status === "error" ? (
+              <p className="ip-error">Forecast unavailable.</p>
+            ) : forecasts.length === 0 ? (
+              <p className="empty-state">No forecast hours were returned.</p>
+            ) : (
+              <table className="data-table forecast-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Time</th>
+                    <th scope="col" className="num">
+                      Air temp.
+                    </th>
+                    <th scope="col" className="num">
+                      Precip. chance
+                    </th>
+                    <th scope="col" className="num">
+                      Amount
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {forecasts.map((hour) => (
+                    <tr key={hour.time} className="forecast-hour">
+                      <td>{formatLocalHour(hour.time)}</td>
+                      <td className="num forecast-temperature">{shortTemperature(hour.temperature, units)}</td>
+                      <td className="num">{hour.precipitationProbability}%</td>
+                      <td className="num">
+                        {hour.snowfall >= 0.1
+                          ? `${formatSnowfall(hour.snowfall, units)} snow`
+                          : formatPrecipitation(hour.precipitation, units)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Section>
+
+          <Section
+            title="Alerts and local reports"
+            aside={reportCount === null ? undefined : `${alertCount} alert${alertCount === 1 ? "" : "s"} · ${reportCount} report${reportCount === 1 ? "" : "s"}`}
+          >
+            {observationData?.alerts?.length === 0 && <p className="empty-state">No active NWS alerts for this location.</p>}
+            <p className="ip-subheading">NWS storm reports, last 72 hours within 50 mi</p>
+            {!reportsState || reportsState.status === "loading" ? (
+              <p className="empty-state" role="status">Loading reports…</p>
+            ) : reportsState.status === "error" ? (
+              <ErrorWithRetry message={reportsState.error} onRetry={retryReports} />
+            ) : reportsState.data.reports.length === 0 ? (
+              <p className="empty-state">No reports from NWS {reportsState.data.office} in the last 72 hours.</p>
+            ) : (
+              <table className="data-table">
+                <tbody>
+                  {[...winterReports, ...reportsState.data.reports.filter((r) => !r.winter)].slice(0, 8).map((report) => (
+                    <tr key={report.id}>
+                      <td>
+                        {humanize(report.type.toLowerCase())}
+                        {reportMagnitude(report.magnitude, report.unit, units)}
+                        <span className="dd-note">{report.location}</span>
+                      </td>
+                      <td className="num">{formatDateTime(report.time)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+
+            <p className="ip-subheading">Agency plow status</p>
+            {!plowState || plowState.status === "loading" ? (
+              <p className="empty-state">Checking for a local plow-status feed…</p>
+            ) : plowState.status === "error" ? (
+              <ErrorWithRetry message={plowState.error} onRetry={retryPlow} />
+            ) : plowFeeds.length === 0 ? (
+              <p className="empty-state">No public plow-status feed is connected for this area.</p>
+            ) : (
+              plowFeeds.map((feed) => (
+                <div key={feed.feed.id} className="plow-feed">
+                  <p>
+                    <strong>{feed.feed.agency}</strong>
+                  </p>
+                  <p className="dd-note">
+                    {feed.routes.features.length} route segments ·{" "}
+                    {(Object.keys(feed.counts) as (keyof typeof feed.counts)[])
+                      .filter((category) => feed.counts[category] > 0)
+                      .map((category) => `${feed.counts[category]} ${PLOW_STATUS_LABELS[category].toLowerCase()}`)
+                      .join(", ")}
+                  </p>
+                  <p className={feed.allStale ? "dd-note ip-error" : "dd-note"}>
+                    {feed.newestUpdate
+                      ? `Last updated ${formatDate(feed.newestUpdate)}${feed.allStale ? ". Outdated; not current road conditions" : ""}.`
+                      : "No update time provided."}{" "}
+                    <a className="link" href={feed.feed.publicMapUrl} target="_blank" rel="noreferrer">
+                      Agency map
+                    </a>
+                    {colorMode !== "plow" && (
+                      <>
+                        {" · "}
+                        <button type="button" className="text-button" onClick={() => setColorChoice("plow")}>
+                          Show on map
+                        </button>
+                      </>
+                    )}
+                  </p>
+                </div>
+              ))
+            )}
+            {plowState?.status === "ready" &&
+              plowState.data.errors.map((error) => (
+                <p key={error.feedId} className="ip-error">
+                  {error.message}
+                </p>
+              ))}
+          </Section>
+
+          <Section title="Data sources">
+            <dl className="facts sources">
+              <dt>Roads and features</dt>
+              <dd>
+                OpenStreetMap
+                <span className="dd-note">
+                  <span className="map-data-status" role="status">{mapStatus}</span> · read from the basemap&apos;s vector tiles
+                </span>
+              </dd>
+              <dt>Road incidents</dt>
+              <dd>
+                TomTom Traffic
+                <span className="dd-note">
+                  {!incidentsState
+                    ? "Requesting…"
+                    : incidentsState.status === "error"
+                      ? "Unavailable"
+                      : incidentData?.configured
+                        ? `${incidentList.length} incident${incidentList.length === 1 ? "" : "s"} in the area`
+                        : "Not connected (no API key)"}
+                </span>
+              </dd>
+              <dt>Weather model</dt>
+              <dd>
+                Open-Meteo
+                {weatherData && <span className="dd-note">Retrieved {formatClock(weatherData.updatedAt)}</span>}
+              </dd>
+              <dt>Observations, alerts</dt>
+              <dd>National Weather Service</dd>
+              <dt>Storm reports</dt>
+              <dd>NWS via Iowa Environmental Mesonet</dd>
+              <dt>Place search</dt>
+              <dd>Photon (OpenStreetMap)</dd>
+              {hasPlowFeed && (
+                <>
+                  <dt>Plow status</dt>
+                  <dd>{plowFeeds.map((feed) => feed.feed.agency).join(", ")}</dd>
+                </>
+              )}
+            </dl>
+            <p className="fine-print">
+              RoadSalt supports awareness and review. It does not recommend treatment or application rates.
+            </p>
+          </Section>
+        </aside>
       </main>
     </div>
   );

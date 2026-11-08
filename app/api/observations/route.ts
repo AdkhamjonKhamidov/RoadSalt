@@ -1,18 +1,18 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { PersistentCache } from "../../lib/cache-db";
 import type { ObservationData } from "../../lib/data-types";
 import { NWS_BASE, parseAlerts, parseObservation } from "../../lib/nws";
 import { NwsError, nwsJson, nwsPlace } from "../../lib/nws-server";
 import {
   coordinateKey,
   coordinatesFromSearchParams,
-  ExpiringCache,
 } from "../../lib/validation";
 
 // GET /api/observations?lat=..&lon=.. → measured conditions from the nearest
 // NWS station plus active alerts for the point. US locations only.
 
 const OBSERVATION_STALE_MS = 2 * 60 * 60 * 1000;
-const dataCache = new ExpiringCache<ObservationData>(200, 5 * 60 * 1000);
+const dataCache = new PersistentCache<ObservationData>("observations", 200, 5 * 60 * 1000);
 const pending = new Map<string, Promise<ObservationData>>();
 
 async function fetchObservations(latitude: number, longitude: number): Promise<ObservationData> {

@@ -1,20 +1,16 @@
 import type { FeatureCollection, Geometry } from "geojson";
 
 /**
- * A normalized road (GeoJSON feature properties). `roadId` is the stable app
- * id: `way/<osmId>` for Overpass data, `tile:<class>:<name>` for tile data.
+ * A normalized road (GeoJSON feature properties), read from the basemap's
+ * OpenStreetMap vector tiles. `roadId` is `tile:<class>:<name>`.
  */
 export type RoadProperties = {
   roadId: string;
-  /** OSM way id; null when derived from vector tiles (which carry no ids). */
-  osmId?: number | null;
   name?: string;
-  /** OSM highway value (e.g. residential) or the tile class/subclass. */
+  /** Tile road class/subclass (OSM highway value), e.g. residential. */
   classification: string;
   /** Route reference, e.g. "US 13". */
   ref?: string;
-  /** Selected raw OSM tags kept for the details panel (Overpass data only). */
-  tags?: Record<string, string>;
 };
 
 export type EnvironmentalKind =
@@ -40,8 +36,6 @@ export const ENVIRONMENTAL_KINDS = Object.keys(
 
 export type EnvironmentalProperties = {
   featureId: string;
-  /** OSM element id; null for tile-derived features. */
-  osmId?: number | null;
   kind: EnvironmentalKind;
   /** Finer mapped type, e.g. river, stream, pond, reservoir, marsh. */
   subtype?: string;
@@ -72,12 +66,7 @@ export type MapData = {
   roads: FeatureCollection<Geometry, RoadProperties>;
   environmentalFeatures: FeatureCollection<Geometry, EnvironmentalProperties>;
   updatedAt: string;
-  source:
-    | "OpenStreetMap Overpass API"
-    | "OpenStreetMap vector tiles (MapTiler)"
-    | "OpenStreetMap vector tiles (CARTO)";
-  /** Query radius for Overpass data; null for tile data (loaded map area). */
-  radiusMeters: number | null;
+  source: "OpenStreetMap vector tiles (MapTiler)" | "OpenStreetMap vector tiles (CARTO)";
 };
 
 export type WeatherHour = {

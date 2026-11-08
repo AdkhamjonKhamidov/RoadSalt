@@ -1,5 +1,6 @@
 import { NWS_BASE, parseNearestStation, parsePointInfo } from "./nws";
-import { coordinateKey, ExpiringCache } from "./validation";
+import { PersistentCache } from "./cache-db";
+import { coordinateKey } from "./validation";
 
 // Server-only helpers for api.weather.gov (imported by route handlers only).
 
@@ -47,7 +48,7 @@ export type NwsPlace = {
   station: { id: string; name: string | null };
 };
 
-const placeCache = new ExpiringCache<NwsPlace>(300, 24 * 60 * 60 * 1000);
+const placeCache = new PersistentCache<NwsPlace>("nws-points", 300, 24 * 60 * 60 * 1000);
 
 /** Forecast office and nearest observation station for a US point (cached 24 h). */
 export async function nwsPlace(latitude: number, longitude: number): Promise<NwsPlace> {

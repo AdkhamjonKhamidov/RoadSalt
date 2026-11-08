@@ -18,8 +18,9 @@ export const DEFAULT_LOCATION: Location = {
   source: "Configured default",
 };
 export const INITIAL_ZOOM = 14;
-// Half-width of the Overpass query box. Kept small: service roads are included.
-export const SEARCH_RADIUS_METERS = 2_000;
+
+/** Roads are split into pieces of this length to rate runoff risk along them. */
+export const ROAD_SEGMENT_METERS = 100;
 
 export const ENVIRONMENTAL_THRESHOLDS_METERS = {
   high: 50,

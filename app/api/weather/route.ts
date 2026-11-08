@@ -1,15 +1,15 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { PersistentCache } from "../../lib/cache-db";
 import type { WeatherData } from "../../lib/data-types";
 import { openMeteoUrl, parseOpenMeteo } from "../../lib/open-meteo";
 import {
   coordinateKey,
   coordinatesFromSearchParams,
-  ExpiringCache,
 } from "../../lib/validation";
 
 // GET /api/weather?lat=..&lon=.. → current conditions + next 24 hours.
 const REQUEST_TIMEOUT_MS = 15_000;
-const cache = new ExpiringCache<WeatherData>(200, 10 * 60 * 1000);
+const cache = new PersistentCache<WeatherData>("weather", 200, 10 * 60 * 1000);
 const pending = new Map<string, Promise<WeatherData>>();
 
 class WeatherProviderError extends Error {

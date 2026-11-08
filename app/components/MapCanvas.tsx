@@ -39,7 +39,7 @@ export type RoadFeatureProperties = RoadProperties & {
   condition?: RoadCondition;
 };
 export type EnvironmentalFeatureProperties = EnvironmentalProperties;
-export type RoadColorMode = "conditions" | "type" | "sensitivity" | "plow";
+export type RoadColorMode = "conditions" | "sensitivity" | "plow";
 
 export type IncidentProperties = {
   id: string;
@@ -76,6 +76,11 @@ export type MapCanvasProps = {
   selectedRoadId?: string | null;
   visibleEnvironmentalKinds?: EnvironmentalKind[];
   onEnvironmentalVisibilityChange?: (kind: EnvironmentalKind) => void;
+  /** Show the RoadSalt road network overlay (default true). */
+  roadsVisible?: boolean;
+  onRoadsVisibleChange?: (visible: boolean) => void;
+  /** Rendered at the top of the map control panel (view and basemap choice). */
+  controls?: React.ReactNode;
   onRoadSelect?: (road: Feature<Geometry, RoadFeatureProperties>) => void;
   /** Receives roads/features read from the loaded basemap tiles after each view change. */
   onTileData?: (data: MapData) => void;
@@ -89,11 +94,11 @@ const ROAD_HIT_TOLERANCE_PX = 6;
 // The interface keeps the navy / blue / off-white palette. Roads get three
 // contrasting accents so they read clearly on either basemap.
 export const ROAD_COLORS = {
-  red: "#E4572E",
-  amber: "#F2A900",
-  teal: "#2A9D8F",
-  gray: "#8A94A3",
-  selected: "#3F72AF",
+  red: "#B3261E",
+  amber: "#D4890F",
+  teal: "#2E7D8C",
+  gray: "#9AA4B1",
+  selected: "#112D4E",
 } as const;
 const THEME = {
   light: { minor: "#112D4E", casing: "#FFFFFF", envOpacity: 1 },
@@ -163,8 +168,7 @@ function roadColor(mode: RoadColorMode, theme: MapTheme): ExpressionSpecificatio
       ROAD_COLORS.gray,
     ];
   }
-  if (mode === "plow") return minor;
-  return ["match", roadClass(), MAJOR, ROAD_COLORS.amber, MID, ROAD_COLORS.teal, minor];
+  return minor; // plow view: roads recede behind the agency routes
 }
 
 function plowColor(): ExpressionSpecification {
@@ -188,12 +192,25 @@ function setData(map: MapLibreMap, id: string, data: FeatureCollection | undefin
   (map.getSource(id) as GeoJSONSource | undefined)?.setData(data ?? EMPTY_COLLECTION);
 }
 
-function updateOverlays(map: MapLibreMap, props: MapCanvasProps) {
-  if (!map.isStyleLoaded()) return;
+/**
+ * `styleReady` is passed as true from the `load` / `style.load` handlers:
+ * there the style can take layers, but `isStyleLoaded()` may still be false
+ * while tiles and sprites load. Bailing out then left a freshly switched
+ * basemap without any overlays until some other prop changed.
+ */
+function updateOverlays(map: MapLibreMap, props: MapCanvasProps, styleReady = map.isStyleLoaded()) {
+  if (!styleReady) return;
   const theme = props.theme ?? "light";
   const mode = props.roadColorMode ?? "conditions";
   const palette = THEME[theme];
-  const firstLabelLayer = map.getStyle().layers?.find((layer) => layer.type === "symbol")?.id;
+  // Insert overlays above all basemap geometry (roads, buildings) but below the
+  // labels that follow it. The first symbol layer is not enough: MapTiler
+  // styles put water labels before buildings and roads, which hid our roads.
+  const basemapLayers = (map.getStyle().layers ?? []).filter((layer) => !layer.id.startsWith("roadsalt-"));
+  const lastGeometryIndex = basemapLayers
+    .map((layer) => layer.type !== "symbol" && !layer.id.includes("boundary"))
+    .lastIndexOf(true);
+  const firstLabelLayer = basemapLayers.find((layer, index) => index > lastGeometryIndex && layer.type === "symbol")?.id;
   const addBelowLabels = (layer: Parameters<MapLibreMap["addLayer"]>[0]) =>
     map.addLayer(layer, firstLabelLayer);
 
@@ -307,13 +324,12 @@ function updateOverlays(map: MapLibreMap, props: MapCanvasProps) {
   }
 
   // Theme- and mode-dependent paint.
-  // Light condition colours need a darker outline on the light basemap.
-  map.setPaintProperty(
-    "roadsalt-road-casing",
-    "line-color",
-    mode === "conditions" && theme === "light" ? "#5B6672" : palette.casing,
-  );
+  map.setPaintProperty("roadsalt-road-casing", "line-color", palette.casing);
   map.setPaintProperty("roadsalt-road-casing", "line-width", roadWidth(mode === "conditions" ? 1.6 : 2.5));
+  const roadVisibility = props.roadsVisible === false ? "none" : "visible";
+  for (const id of ["roadsalt-road-casing", "roadsalt-road-network"]) {
+    map.setLayoutProperty(id, "visibility", roadVisibility);
+  }
   map.setPaintProperty("roadsalt-road-network", "line-color", roadColor(mode, theme));
   map.setPaintProperty("roadsalt-road-network", "line-opacity", mode === "plow" ? 0.35 : 0.95);
   map.setPaintProperty("roadsalt-road-casing", "line-opacity", mode === "plow" ? 0.3 : 0.9);
@@ -335,6 +351,14 @@ function updateOverlays(map: MapLibreMap, props: MapCanvasProps) {
   const selectedFilter: ExpressionSpecification = ["==", ["get", "roadId"], props.selectedRoadId ?? ""];
   map.setFilter("roadsalt-selected-casing", selectedFilter);
   map.setFilter("roadsalt-selected-road", selectedFilter);
+  // Proximity view: show the selected road as a navy halo *under* its coloured
+  // 100 m segments, so the per-segment exposure stays readable.
+  const halo = mode === "sensitivity";
+  if (halo) map.moveLayer("roadsalt-selected-casing", "roadsalt-road-casing");
+  else map.moveLayer("roadsalt-selected-casing", "roadsalt-selected-road");
+  map.setPaintProperty("roadsalt-selected-casing", "line-color", halo ? ROAD_COLORS.selected : "#FFFFFF");
+  map.setPaintProperty("roadsalt-selected-casing", "line-width", roadWidth(halo ? 9 : 7));
+  map.setLayoutProperty("roadsalt-selected-road", "visibility", halo ? "none" : "visible");
 
   const visibleKinds = props.visibleEnvironmentalKinds ?? [];
   for (const kind of ENVIRONMENTAL_KINDS) {
@@ -422,7 +446,7 @@ export default function MapCanvas(props: MapCanvasProps) {
           styleLoadedRef.current = true;
           setLoading(false);
           setMapError(null);
-          updateOverlays(map, propsRef.current);
+          updateOverlays(map, propsRef.current, true);
 
           const markerElement = document.createElement("div");
           markerElement.className = "roadsalt-location-marker";
@@ -447,7 +471,7 @@ export default function MapCanvas(props: MapCanvasProps) {
         const onStyleLoad = () => {
           if (cancelled || !map) return;
           styleLoadedRef.current = true;
-          updateOverlays(map, propsRef.current);
+          updateOverlays(map, propsRef.current, true);
         };
 
         const onError = (event: ErrorEvent) => {
@@ -642,8 +666,6 @@ export default function MapCanvas(props: MapCanvasProps) {
 
   const theme = props.theme ?? "light";
   const mode = props.roadColorMode ?? "conditions";
-  const minor = THEME[theme].minor;
-
   return (
     <div className={`map-canvas map-theme-${theme} relative h-full w-full`}>
       <div
@@ -653,84 +675,92 @@ export default function MapCanvas(props: MapCanvasProps) {
         aria-label={`Interactive road map around ${props.focus?.label ?? DEMO_LOCATION}`}
       />
 
-      <div className="map-toolbar absolute left-3 top-3 z-10 flex items-center gap-2">
-        <button type="button" className="map-toolbar-button" onClick={resetLocation}>
-          Recenter
-        </button>
-        <button
-          type="button"
-          className="map-toolbar-button"
-          aria-expanded={layerControlsOpen}
-          onClick={() => setLayerControlsOpen((open) => !open)}
-        >
-          Layers
-        </button>
-      </div>
+      <button type="button" className="map-recenter absolute right-[10px] top-[78px] z-10" onClick={resetLocation} title="Return to the selected location">
+        Recenter
+      </button>
 
-      {layerControlsOpen && (
-        <div className="map-layer-controls absolute left-3 top-[3.2rem] z-10">
-          <p className="map-legend-title">Environmental layers</p>
-          {ENVIRONMENTAL_KINDS.map((kind) => (
-            <label key={kind} className="map-layer-option">
-              <input
-                type="checkbox"
-                checked={props.visibleEnvironmentalKinds?.includes(kind) ?? false}
-                onChange={() => props.onEnvironmentalVisibilityChange?.(kind)}
-              />
-              <span>{ENVIRONMENTAL_KIND_LABELS[kind]}</span>
-            </label>
-          ))}
+      {/* One control panel: view and basemap (from the dashboard), legend, layers. */}
+      <div className="map-control-panel absolute left-3 top-3 z-10">
+        {props.controls}
+
+        <div className="map-legend mc-section">
+          <button
+            type="button"
+            className="map-legend-toggle mc-heading"
+            aria-expanded={legendOpen}
+            onClick={() => setLegendChoice(!legendOpen)}
+          >
+            Legend
+          </button>
+          {legendOpen && (
+            <div className="mc-body">
+              {mode === "conditions" && (
+                <>
+                  <LegendRow color={CONDITION_COLORS.closed} label={CONDITION_LABELS.closed} />
+                  <LegendRow color={CONDITION_COLORS.caution} label={CONDITION_LABELS.caution} />
+                  <LegendRow color={CONDITION_COLORS.clear} label={CONDITION_LABELS.clear} />
+                  <LegendRow color={CONDITION_COLORS.unknown} label={CONDITION_LABELS.unknown} />
+                </>
+              )}
+              {mode === "sensitivity" && (
+                <>
+                  <p className="mc-subheading">Each 100 m of road, distance to water, wetland or farmland</p>
+                  <LegendRow color={ROAD_COLORS.red} label="Within 50 m" />
+                  <LegendRow color={ROAD_COLORS.amber} label="Within 250 m" />
+                  <LegendRow color={ROAD_COLORS.teal} label="Beyond 250 m" />
+                  <LegendRow color={ROAD_COLORS.gray} label="No feature data" />
+                </>
+              )}
+              {mode === "plow" && (
+                <>
+                  <LegendRow color={ROAD_COLORS.red} label="Not yet plowed/treated" />
+                  <LegendRow color={ROAD_COLORS.teal} label="Plowed or treated" />
+                  <LegendRow color={ROAD_COLORS.gray} label="Outdated or unknown status" />
+                </>
+              )}
+              <LegendRow color={ROAD_COLORS.selected} label="Selected road" />
+              <p className="mc-subheading">Mapped features (OSM)</p>
+              <LegendRow color={ENVIRONMENT_STYLES.waterway.line} label="Waterway" />
+              <LegendRow color={ENVIRONMENT_STYLES.water.fill} label="Water body" swatch="fill" />
+              <LegendRow color={ENVIRONMENT_STYLES.wetland.fill} label="Wetland" swatch="fill" />
+              <LegendRow color={ENVIRONMENT_STYLES.farmland.fill} label="Farmland" swatch="fill" />
+              <LegendRow color={ENVIRONMENT_STYLES.forest.fill} label="Forest" swatch="fill" />
+            </div>
+          )}
         </div>
-      )}
 
-      <div className="map-legend absolute bottom-3 left-3 z-10">
-        <button
-          type="button"
-          className="map-legend-toggle"
-          aria-expanded={legendOpen}
-          onClick={() => setLegendChoice(!legendOpen)}
-        >
-          Map key {legendOpen ? "−" : "+"}
-        </button>
-        {legendOpen && (
-          <div className="mt-1">
-            {mode === "conditions" && (
-              <>
-                <LegendRow color={CONDITION_COLORS.clear} label={CONDITION_LABELS.clear} />
-                <LegendRow color={CONDITION_COLORS.caution} label={CONDITION_LABELS.caution} />
-                <LegendRow color={CONDITION_COLORS.closed} label={CONDITION_LABELS.closed} />
-                <LegendRow color={CONDITION_COLORS.unknown} label={CONDITION_LABELS.unknown} />
-              </>
-            )}
-            {mode === "type" && (
-              <>
-                <LegendRow color={ROAD_COLORS.amber} label="Highways & primary roads" />
-                <LegendRow color={ROAD_COLORS.teal} label="Secondary & tertiary roads" />
-                <LegendRow color={minor} label="Local roads" />
-              </>
-            )}
-            {mode === "sensitivity" && (
-              <>
-                <LegendRow color={ROAD_COLORS.red} label="Mapped feature within 50 m" />
-                <LegendRow color={ROAD_COLORS.amber} label="Within 250 m" />
-                <LegendRow color={ROAD_COLORS.teal} label="Farther than 250 m" />
-                <LegendRow color={ROAD_COLORS.gray} label="No feature data" />
-              </>
-            )}
-            {mode === "plow" && (
-              <>
-                <LegendRow color={ROAD_COLORS.red} label="Not yet plowed/treated" />
-                <LegendRow color={ROAD_COLORS.teal} label="Plowed or treated" />
-                <LegendRow color={ROAD_COLORS.gray} label="Outdated or unknown status" />
-              </>
-            )}
-            <LegendRow color={ROAD_COLORS.selected} label="Selected road" />
-            <LegendRow color={ROAD_COLORS.selected} label="Winter storm report" swatch="dot" />
-            <LegendRow color={ENVIRONMENT_STYLES.water.line} label="Water & wetlands" swatch="fill" />
-            <LegendRow color={ENVIRONMENT_STYLES.farmland.fill} label="Farmland" swatch="fill" />
-            <LegendRow color={ENVIRONMENT_STYLES.forest.fill} label="Forest" swatch="fill" />
-          </div>
-        )}
+        <div className="mc-section">
+          <button
+            type="button"
+            className="mc-heading"
+            aria-expanded={layerControlsOpen}
+            onClick={() => setLayerControlsOpen((open) => !open)}
+          >
+            Layers
+          </button>
+          {layerControlsOpen && (
+            <div className="map-layer-controls mc-body">
+              <label className="map-layer-option">
+                <input
+                  type="checkbox"
+                  checked={props.roadsVisible !== false}
+                  onChange={() => props.onRoadsVisibleChange?.(props.roadsVisible === false)}
+                />
+                <span>Roads</span>
+              </label>
+              {ENVIRONMENTAL_KINDS.map((kind) => (
+                <label key={kind} className="map-layer-option">
+                  <input
+                    type="checkbox"
+                    checked={props.visibleEnvironmentalKinds?.includes(kind) ?? false}
+                    onChange={() => props.onEnvironmentalVisibilityChange?.(kind)}
+                  />
+                  <span>{ENVIRONMENTAL_KIND_LABELS[kind]}</span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {loading && (

@@ -64,11 +64,6 @@ export function formatDistance(meters: number, units: UnitSystem): string {
   return meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1)} km`;
 }
 
-export function formatLength(miles: number | null, units: UnitSystem): string {
-  if (miles === null) return "Not reported";
-  return units === "imperial" ? `${miles.toFixed(1)} mi` : `${(miles * 1.609344).toFixed(1)} km`;
-}
-
 export function parseUnitSystem(value: unknown): UnitSystem | null {
   return value === "imperial" || value === "metric" ? value : null;
 }

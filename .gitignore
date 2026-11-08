@@ -44,3 +44,11 @@ next-env.d.ts
 
 # claude code (personal, machine-specific settings)
 .claude/settings.local.json
+
+# playwright
+/e2e/test-results/
+/e2e/report/
+/e2e/screenshots/
+
+# local cache database (npm run dev / start)
+/.data/

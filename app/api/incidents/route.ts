@@ -1,9 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { PersistentCache } from "../../lib/cache-db";
 import type { IncidentData } from "../../lib/data-types";
 import { incidentsUrl, parseIncidents } from "../../lib/traffic-incidents";
 import {
   coordinatesFromSearchParams,
-  ExpiringCache,
 } from "../../lib/validation";
 
 // GET /api/incidents?lat=..&lon=.. → live closures and hazards (TomTom) in a
@@ -12,7 +12,7 @@ import {
 
 const REQUEST_TIMEOUT_MS = 10_000;
 // Free tier is ~2,500 requests/day; cache per ~1 km point for 3 minutes.
-const cache = new ExpiringCache<IncidentData>(200, 3 * 60 * 1000);
+const cache = new PersistentCache<IncidentData>("incidents", 200, 3 * 60 * 1000);
 const pending = new Map<string, Promise<IncidentData>>();
 
 async function fetchIncidents(apiKey: string, latitude: number, longitude: number): Promise<IncidentData> {
