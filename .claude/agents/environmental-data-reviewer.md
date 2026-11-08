@@ -1,6 +1,6 @@
 ---
 name: environmental-data-reviewer
-description: Reviews RoadSalt environmental feature classification and user-facing environmental and weather wording for accuracy. This covers waterways, water, wetlands, farmland and protected areas, proximity thresholds, and claims about runoff, pollution, ice or safety. Use after changes to geojson.ts tag mapping, proximity.ts, weather.ts attention rules, or UI copy. Read-only.
+description: Reviews RoadSalt environmental feature classification and user-facing environmental and weather wording for accuracy. This covers waterways, water, wetlands, farmland and protected areas, proximity thresholds, and claims about runoff, pollution, ice or safety. Use after changes to tile-features.ts classification, proximity.ts or segments.ts, weather.ts attention rules, or UI copy. Read-only.
 tools: Read, Grep, Glob
 model: inherit
 skills:

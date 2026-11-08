@@ -1,6 +1,6 @@
 ---
 name: external-api-integration
-description: Procedures for RoadSalt's API integrations (Overpass via app/lib/overpass.ts, loaded in the browser; Open-Meteo via the app/api/weather server route). Covers request architecture, response validation, timeouts, endpoint fallback, caching, rate limits, environment configuration, attribution and documentation. Use when adding, changing or debugging a live data request.
+description: Procedures for RoadSalt's live data integrations, all through app/api server routes (Open-Meteo, NWS, IEM storm reports, TomTom incidents, agency plow feeds, Photon geocoding, Gemini). Covers request architecture, response validation, timeouts, error mapping, the persistent cache, rate limits, environment configuration, attribution and documentation. Use when adding, changing or debugging a live data request.
 ---
 
 # External API integration (RoadSalt)
@@ -8,53 +8,57 @@ description: Procedures for RoadSalt's API integrations (Overpass via app/lib/ov
 ## Architecture (keep it)
 ```
 Browser ──fetch──▶ /api/<name> (Next route handler, server) ──fetch──▶ provider
-                     │ validate → cache success → JSON
+                     │ validate → cache success (PersistentCache) → JSON
                      └ on failure → { error } + 4xx/5xx + no-store
 ```
-- **Exception (approved 2026-11-07):** OSM data is fetched from the browser with `loadMapDataInBrowser()` in `app/lib/overpass.ts`. The public Overpass instances accept CORS, and the server path kept timing out. It still uses the same validation (`overpassToGeoJSON`) and never uses sample data. Shared logic lives in `fetchOverpassMapData()`, which is also used by the kept `/api/map-data` route, so do not duplicate it.
-- All other providers go through server routes. That keeps validation, caching, request identification and any future secrets server-side.
-- Overpass etiquette: instances that answer 429 or 502/504 ("at capacity, request queue is full") must be retried with exponential backoff, never hammered. Do not load-test them while debugging. Two or three verification loads are enough.
-- Route handler shape (follow `app/api/weather/route.ts`):
-  - module-level `cached` (`{ expiresAt, data }`) and `pending` promise,
-  - a typed `ProviderError(message, status)`,
+- Every provider goes through a server route. That keeps validation, caching, request identification and secrets server-side.
+- Roads and environmental features are not fetched at all: they are read from the basemap's vector tiles (`tile-features.ts`). Overpass was removed on 2026-11-08.
+- Route handler shape (follow `app/api/incidents/route.ts`):
+  - a module-level `PersistentCache<T>("namespace", memoryEntries, ttlMs)` and a `pending` map for in-flight sharing,
   - `fetchX()`, which does the request, timeout and validation,
   - `GET()`, which serves the cache or awaits the shared `pending`, maps errors, and clears `pending` in `finally`.
 - Before editing a route handler, check the route handler and caching guides in `node_modules/next/dist/docs/` (this Next.js version has `cacheComponents` enabled).
 
 ## Validation
-- Treat `response.json()` as `unknown`. Narrow with `isRecord`/`finiteNumber`-style guards.
+- Treat `response.json()` as `unknown`. Narrow with `isRecord`/`finiteNumber`/`text` guards from `validation.ts`.
 - Reject the whole response if required structure is missing, with a 502 and a clear message. Drop individual invalid items and clamp physically bounded values (probability 0–100, amounts ≥ 0).
 - Never fill missing values with defaults that look real (no `?? 0` temperatures).
-- Overpass can return HTTP 200 with a `remark` (timeout or memory error). That is treated as a failure.
 
-## Timeouts, fallback and rate limits
-- `AbortSignal.timeout(15_000)`. Map `TimeoutError` → 504.
-- HTTP 429 → 429 ("temporarily rate-limited"). 5xx → 503. Other 4xx → 502 (it is our request bug; don't retry).
-- Overpass falls back to the secondary endpoint only on 429/503-class failures, not after a timeout (to avoid doubling the wait).
-- Send an identifying `User-Agent` (`RoadSalt/0.1 (...)`), as Overpass etiquette asks.
-- Open-Meteo free tier is for non-commercial use, about 10k calls/day. Overpass public instances are shared, so keep to a single bounded query.
+## Timeouts and errors
+- `AbortSignal.timeout(...)` on every provider call. A timeout maps to 504.
+- HTTP 429 → 429 ("temporarily rate-limited"). 5xx → 503. Other 4xx → 502 (our request bug; don't retry).
+- Send an identifying `User-Agent` where the provider asks for one (NWS requires it).
+- Open-Meteo free tier is for non-commercial use, about 10k calls/day. TomTom's free tier is about 2,500 requests/day, so its cache cell is ~1 km for 3 minutes.
 
-## Caching
-- In-process memory, success only: Overpass 15 min, Open-Meteo 10 min. It is per server process and not shared or persistent. That is acceptable for the demo; do not add Redis, KV or a database.
-- The response `Cache-Control` on success is `public, max-age=300, stale-while-revalidate=600`. On failure it is `no-store`.
-- Cached data still carries the original `updatedAt`. The UI shows it.
+## Gemini (`/api/advice`)
+- POST with the road context (`AdviceContext`, validated by `parseAdviceContext`). It streams NDJSON lines (`text`, `sources`, `error`, `done`) from the Gemini Interactions API (`app/lib/advice.ts`).
+- Google Search grounding first. On 429/400 (no grounding quota) it retries once without web search, and the answer says local news wasn't checked.
+- The cache key is road + place + clock hour. `refresh: true` bypasses it (the Regenerate button).
+- The scope rules are in `CLAUDE.md`: no numeric rates (also enforced by `redactRates`), never "icy" or "safe", show sources and Search Suggestions.
+
+## Caching (`app/lib/cache-db.ts`)
+- `PersistentCache`: an in-memory hot layer in front of Node's built-in SQLite (`node:sqlite`), stored at `.data/roadsalt.db` (gitignored). It caches successful results only and survives restarts. If SQLite can't open, it degrades to memory only.
+- TTLs: weather 10 min, observations 5 min, NWS points 24 h, incidents 3 min, storm reports 10 min, plow status 2 min, geocoding 1 h, Gemini 1 h.
+- `GET /api/cache` (development only; 404 in production) shows entries, size and hits per namespace. To reset, stop the server and delete `.data/`.
+- Cached data keeps its original `updatedAt`, and the UI shows it.
 
 ## Environment configuration
-- No keys today. If one is ever approved: server-only `process.env.X` in a route handler, declared in `.env.local` (gitignored, and Claude cannot read it), documented by variable name only in `programmer.md`. Never use `NEXT_PUBLIC_` for secrets.
+- Server-only keys in `.env.local` (gitignored, and Claude cannot read it): `TOMTOM_API_KEY`, `GEMINI_API_KEY`, optional `GEMINI_MODEL`. Browser-visible by design: `NEXT_PUBLIC_MAPTILER_API_KEY`, `NEXT_PUBLIC_MAPTILER_STYLE_ID`. Document variables by name only in `programmer.md` and `.env.example`. Never use `NEXT_PUBLIC_` for secrets.
 
 ## Attribution
 - OpenStreetMap data: "© OpenStreetMap contributors", ODbL, shown in the map attribution control.
-- CARTO basemap: attribution required. The public style is for development and demos.
-- Open-Meteo: CC BY 4.0. Credit "Weather data by Open-Meteo.com".
+- MapTiler/CARTO basemaps: attribution required.
+- Open-Meteo: CC BY 4.0. NWS and IEM are public. TomTom and Gemini are named in the UI's data sources.
 - Every API response includes a `source` field. Keep it and show it.
 
 ## Checking a route for real
 With `npm run dev` running:
 ```bash
-curl -sS -o /dev/null -w "%{http_code}\n" http://localhost:3000/api/weather
-curl -sS http://localhost:3000/api/map-data | head -c 400
+curl -sS -o /dev/null -w "%{http_code}\n" "http://localhost:3000/api/weather?lat=38.348&lon=-75.607"
+curl -sS "http://localhost:3000/api/incidents?lat=38.348&lon=-75.607" | head -c 300
+curl -sS http://localhost:3000/api/cache
 ```
-Report the actual status, feature or hour counts, and `source`. A timeout or 429 is a real result. Report it as such; never treat it as a pass.
+Report the actual status, counts and `source`. A timeout or 429 is a real result. Report it as such; never treat it as a pass.
 
 ## Documentation
-Any change to endpoints, parameters, cache times, fallback or limits must update `docs/DATA_SOURCES.md` and `CHANGELOG.md` (see `documentation-maintenance`).
+Any change to endpoints, parameters, cache times or limits must update `docs/DATA_SOURCES.md` and `CHANGELOG.md` (see `documentation-maintenance`).

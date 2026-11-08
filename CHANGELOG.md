@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-08 — README and development access
+
+- **README rewritten** for the current app: purpose, the problem, features, hackathon tracks, setup, optional keys, data sources and limitations. It now shows the user's demo screenshot (`public/project demo/demo screenshot.png`). Overpass references removed.
+- **Next.js dev indicator hidden** (`devIndicators: false` in `next.config.ts`); compile and runtime errors still show in development.
+- **`/api/cache` is development-only:** production builds answer 404, so cache internals aren't public. Verified with `next start` (404) and `next dev` (200).
+
 ## 2026-11-08 — Overpass removed, cache database, 100 m runoff segments
 
 ### What changed

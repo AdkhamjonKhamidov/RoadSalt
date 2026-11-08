@@ -18,7 +18,6 @@
       "Bash(curl -sS http://localhost:3000/*)",
       "WebFetch(domain:open-meteo.com)",
       "WebFetch(domain:wiki.openstreetmap.org)",
-      "WebFetch(domain:dev.overpass-api.de)",
       "WebFetch(domain:maplibre.org)",
       "WebFetch(domain:nextjs.org)"
     ],

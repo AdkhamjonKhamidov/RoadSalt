@@ -26,7 +26,7 @@ Review the diff, not the whole repo. Read surrounding code only as needed to jud
 
 **Security**
 - No secrets in client code, and no `NEXT_PUBLIC_` secrets. `.env*` is not committed.
-- No user-controlled input interpolated into Overpass QL or URLs without validation.
+- No user-controlled input interpolated into provider URLs or the Gemini request without validation (`parseAdviceContext`).
 - No `dangerouslySetInnerHTML`. Popup HTML uses text, not unsanitised markup.
 
 **API reliability**
@@ -46,7 +46,7 @@ Review the diff, not the whole repo. Read surrounding code only as needed to jud
 - Weather attention and environmental sensitivity are kept separate. Sources and attribution are intact. No salt-rate advice.
 
 **Design consistency**
-- Palette and Georgia only. The map stays dominant. No redesign. Existing class families are reused.
+- Navy/blue/pale-blue/off-white palette; Georgia for wordmark and headings, sans for dense UI. GIS-style sections, not card stacks. The map stays dominant. Existing class families are reused.
 
 **Unnecessary complexity / scope**
 - Is this the smallest change? Any speculative abstraction, unused code, or out-of-scope feature (optimization, scheduling, auth, AI chat, ML, elevation, unrequested risk highlighting)?

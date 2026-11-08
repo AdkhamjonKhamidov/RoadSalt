@@ -20,8 +20,8 @@ npm run build
 
 ## 2. Targeted logic checks (when `app/lib` changes)
 `app/lib/*.ts` is framework-free. Exercise it with a throwaway script in the session scratchpad (not committed), for example using Node's built-in TypeScript stripping, if supported (`node --experimental-strip-types`), or checking against the compiled build. Cover:
-- `overpassToGeoJSON`: valid way → LineString; malformed point → dropped; relation outer rings stitched; unknown tags → ignored.
-- `overpassQuery`: radius and tags as expected.
+- `segmentRoad`/`splitLine`: 100 m pieces, tails, per-piece levels, forests ignored (`tests/segments.test.ts`).
+- `parseAdviceContext`, `parseAdviceChunk`, `redactRates` (`tests/advice.test.ts`).
 - `assessEnvironmentalSensitivity`: threshold boundaries (50 m and 250 m), and an empty feature list → Unknown.
 - `classifyWeatherAttention`: ≤ 0 °C with precipitation → Elevated; 0–3 °C → Moderate; an empty forecast → Insufficient data.
 
@@ -33,10 +33,10 @@ curl -sS -w "\nHTTP %{http_code}\n" "http://localhost:3000/api/weather?lat=38.34
 curl -sS -w "\nHTTP %{http_code}\n" "http://localhost:3000/api/observations?lat=38.348&lon=-75.607" | tail -c 300
 curl -sS -w "\nHTTP %{http_code}\n" "http://localhost:3000/api/geocode?q=Baltimore" | tail -c 300
 ```
-Record the HTTP status, `source`, `hourly.length` (expect up to 24), road and environment feature counts, and `updatedAt`. A 504/429/503 is a real provider outcome. Report it. Overpass has timed out in this environment before.
+Record the HTTP status, `source`, `hourly.length` (expect up to 24), road and environment feature counts, and `updatedAt`. A 504/429/503 is a real provider outcome. Report it.
 
 ## 4. Browser verification (UI or map changes)
-Run `npm run test:ui` (Playwright, config `playwright.config.ts`, tests in `e2e/`). It starts or reuses `npm run dev`, runs serially against live services, blocks public Overpass by default (`RUN_OVERPASS=1` enables the live Overpass test), and saves one screenshot per feature to `e2e/screenshots/`. **Open the screenshots.** Assertions can't see WebGL map layers: roads drawn under the basemap still pass the DOM checks. For a one-off look, write a throwaway `e2e/zz-*.spec.ts`, run it, then delete it.
+Run `npm run test:ui` (Playwright, config `playwright.config.ts`, tests in `e2e/`). It starts or reuses `npm run dev`, runs serially against live services, and saves one screenshot per feature to `e2e/screenshots/`. **Open the screenshots.** Assertions can't see WebGL map layers: roads drawn under the basemap still pass the DOM checks. For a one-off look, write a throwaway `e2e/zz-*.spec.ts`, run it, then delete it.
 
 Manual checks:
 Use the built-in browser pane at `http://localhost:3000` (the desktop app's `preview_start`/`navigate` tools; `.claude/launch.json` can define the dev server). Check:
@@ -63,7 +63,7 @@ Confirm that values on screen match the API route output (spot-check one tempera
 | tsc | … | … |
 | build | … | … |
 | /api/weather | HTTP … | hours=…, source=… |
-| /api/map-data | HTTP … | roads=…, env=… |
+| /api/incidents | HTTP … | configured=…, incidents=… |
 | browser | … | what was clicked and seen |
 
 Then: **Not verified:** a list of items.

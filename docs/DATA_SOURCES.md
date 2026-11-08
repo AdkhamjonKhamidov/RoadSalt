@@ -5,25 +5,25 @@ RoadSalt uses only public, real-world data. Every provider is called with a time
 | Provider | Used for | Called from | Key |
 |---|---|---|---|
 | Photon (OpenStreetMap) | Location search / autocomplete | Server route `/api/geocode` | None |
-| MapTiler or CARTO vector tiles (OpenStreetMap) | Basemap; roads and features shown immediately | Browser (MapLibre) | MapTiler: optional public key |
-| OpenStreetMap Overpass API | Detailed roads and features (OSM IDs, tags, unnamed and service roads) | Browser (`app/lib/overpass.ts`) | None |
+| MapTiler or CARTO vector tiles (OpenStreetMap) | Basemap; all roads and environmental features | Browser (MapLibre) | MapTiler: optional public key |
 | Open-Meteo Forecast | Current conditions and 24-hour forecast | Server route `/api/weather` | None |
 | National Weather Service (api.weather.gov) | Measured station observations and active alerts (US only) | Server route `/api/observations` | None |
 | NWS Local Storm Reports via Iowa Environmental Mesonet | Spotter, public and mesonet storm reports near the location (US) | Server route `/api/storm-reports` | None |
 | Local agency plow-status feeds (ArcGIS) | Plow / treatment status where an agency publishes it | Server route `/api/plow-status` | None |
-| TomTom Traffic Incidents API v5 | Live road closures and hazards (US) | Server route `/api/incidents` | `TOMTOM_API_KEY` (server-only, free tier) |
+| TomTom Traffic Incidents API v5 | Live road closures and hazards | Server route `/api/incidents` | `TOMTOM_API_KEY` (server-only, free tier) |
+| Google Gemini (Interactions API) | Per-road treatment approach, with Google Search grounding when the project allows it | Server route `/api/advice` | `GEMINI_API_KEY` (server-only) |
+
+Every server route caches successful responses in a local SQLite database (section 12), so repeat requests and server restarts don't call providers again.
 
 ## Normalized data structures (`app/lib/data-types.ts`)
 
 - **Location:** `id`, `name`, `displayName`, `latitude`, `longitude`, `boundingBox` (`[west, south, east, north]` or null), `locality`, `region`, `country`, `placeType`, `source`.
 - **Road** (GeoJSON feature properties, `RoadProperties`):
-  - `roadId`: `way/<id>` from Overpass, or `tile:<class>:<name>` from tiles.
-  - `osmId`: null for tile data.
-  - `name`, `classification` (OSM highway value), `ref`.
-  - `tags`: a whitelist of highway, name, ref, service, surface, lanes, maxspeed, oneway, bridge, tunnel, lit and sidewalk.
+  - `roadId`: `tile:<class>:<name>`.
+  - `name`, `classification` (tile road class), `ref`.
   - Geometry is a GeoJSON `LineString` or `MultiLineString` in `[lon, lat]`.
 - **EnvironmentalFeature** (`EnvironmentalProperties`):
-  - `featureId`, `osmId`, `name`.
+  - `featureId`, `name`.
   - `kind`: waterway, water, wetland, farmland, forest or protected.
   - `subtype`: for example stream, river, pond, marsh or farmland.
   - Geometry is a LineString or (Multi)Polygon.
@@ -35,8 +35,8 @@ RoadSalt uses only public, real-world data. Every provider is called with a time
 - Input is `unknown` and narrowed field by field (`app/lib/validation.ts`).
 - Invalid coordinates (non-numeric or out of range), too-short geometry, unexpected geometry types and malformed elements are **dropped**, never repaired with guesses.
 - Missing optional values stay `null` and are shown as "Not reported". Missing required values reject the response with a clear error.
-- Duplicates are removed: Overpass elements by `type/id`; geocoding results by OSM object, and by the same label within about 10 km (for example a city's boundary and its center point).
-- Source IDs are preserved (OSM way and relation IDs, Photon OSM IDs, NWS station IDs).
+- Duplicates are removed: tile pieces of one named road or feature are merged; geocoding results by OSM object, and by the same label within about 10 km (for example a city's boundary and its center point).
+- Source IDs are preserved where providers supply them (Photon OSM IDs, NWS station IDs, TomTom incident IDs).
 - Parsers are covered by `npm test` (`tests/*.test.ts`), including malformed inputs.
 
 ## 1. Photon geocoder (location search)
@@ -61,23 +61,14 @@ RoadSalt uses only public, real-world data. Every provider is called with a time
   - `landcover` class wetland or farmland.
   - `park` class nature_reserve or national_park. Generic `protected_area` is excluded, because tiles don't say whether it's natural or cultural.
   - Unnamed features of one kind are merged into one feature.
-- **Coverage:** the loaded map area, not a fixed radius. The UI labels this source "OSM map tiles", and road details say that no OSM way ID is available.
+- **Coverage:** the loaded map area, not a fixed radius. This is the only road and feature source; the Overpass API was removed on 2026-11-08 because its public instances never answered during development.
 
-## 3. OpenStreetMap Overpass API (detail, when available)
+## 3. Runoff exposure in 100 m segments (computed)
 
-- **Endpoints:** queried in parallel, first valid answer wins:
-  - `https://overpass-api.de/api/interpreter`
-  - `https://overpass.kumi.systems/api/interpreter`
-  - `https://overpass.private.coffee/api/interpreter`
-- **Query** (`overpassQuery`): a global `[bbox:…]` of ±`SEARCH_RADIUS_METERS` (2 km, so about 4 × 4 km) around the selected location, with `[timeout:20]` and `out geom qt`.
-  - Roads: `highway` ∈ motorway, trunk, primary, secondary, tertiary, unclassified, residential, living_street, service, excluding `service=driveway|parking_aisle|drive-through`.
-  - Features: `waterway`, `natural=water|wetland`, `water`, `wetland`, `landuse=farmland|farmyard|orchard|vineyard|plant_nursery`, `boundary=protected_area|national_park`, `leisure=nature_reserve` and `protect_class`, for ways and relations. Cultural protections (`protect_class` 21–29, or a "historic" `protection_title`) are excluded.
-- **Reliability:**
-  - Busy answers (429, or 5xx "at capacity, request queue is full") are retried after 2, 4 and 8 seconds, within one 25-second deadline.
-  - The most informative error is shown, with Retry. Failures are logged to the console as `[map-data] …`.
-  - Successes are cached per location in `sessionStorage` for 15 minutes.
-  - When Overpass succeeds, its data replaces the tile data for that location. When it fails, the tile data stays and the map remains usable.
-- **Limits:** public instances are often at capacity, so detailed data may be unavailable for a while. Relation boundaries are rebuilt from returned outer members, and incomplete rings become lines. `/api/map-data?lat=..&lon=..` offers the same query server-side, but the UI doesn't use it.
+- **What:** `app/lib/segments.ts` splits every road into 100 m pieces (`ROAD_SEGMENT_METERS`) and measures each piece's distance to the nearest mapped waterway, water body, wetland, farmland or protected area (forests excluded) from section 2.
+- **Levels:** High within 50 m, Moderate within 250 m, otherwise Low; Unknown when no features are loaded (`ENVIRONMENTAL_THRESHOLDS_METERS`).
+- **Shown as:** per-segment road colours in the Environmental proximity view, and for the selected road a segment strip, counts and the exposed stretches with their nearest feature.
+- **Limits:** planar distance approximations from volunteer-mapped OSM features. Proximity is not evidence of runoff; unmapped areas aren't necessarily free of water.
 
 ## 4. Open-Meteo Forecast API
 
@@ -132,26 +123,42 @@ RoadSalt uses only public, real-world data. Every provider is called with a time
 
 ## 9. Basemap themes
 
-- **Dark (default when a MapTiler key is set):** MapTiler `dataviz-dark`, the dark canvas style used by county snow-route maps, so colored roads stand out. It uses the same OpenMapTiles layer names, so roads and features are still read from it.
-- **Light:** MapTiler `positron`, or CARTO Positron without a key. CARTO's dark style uses a different tile schema (Protomaps), so without a MapTiler key only the light theme is offered.
-- **Tile feature classes:** `landcover` class `wood` or `forest` becomes forest. Through Overpass, `natural=wood` and `landuse=forest` become forest. Forests are shown and listed, but they don't set the sensitivity level, because woods line most rural roads.
+- **Light (default):** MapTiler `positron`, or CARTO Positron without a key.
+- **Dark (optional, needs a MapTiler key):** MapTiler `dataviz-dark`. It uses the same OpenMapTiles layer names, so roads and features are still read from it.
+- CARTO's dark style uses a different tile schema (Protomaps), so without a MapTiler key only the light theme is offered.
+- **Tile feature classes:** `landcover` class `wood` or `forest` becomes forest. Forests are shown and listed, but they don't set the sensitivity level, because woods line most rural roads.
 
 ## 10. Road conditions (default map view)
 
-Every colour is backed by named data. Green means **nothing is reported**, never "safe".
+Every colour is backed by named data. "No reported problems" means **nothing is reported**, never "safe".
 
 | Colour | Meaning | Source |
 |---|---|---|
-| `#E00000` Closed | A reported road closure, drawn along the closed stretch | TomTom incident `iconCategory` 8 |
-| `#F1A344` Use caution | A reported hazard on that stretch (accident, ice, flooding, dangerous conditions, road works, lane closure, fog, wind, jam, broken-down vehicle), **or** an area-wide winter road alert, **or** freezing precipitation in the forecast | TomTom; NWS alerts (winter storm, winter weather, ice storm, blizzard, freezing rain/drizzle/fog, snow squall, lake-effect/heavy snow, sleet); Open-Meteo (Elevated weather attention) |
-| `#B7D894` No reported problems | Incident data loaded and nothing reported on this road, and no area-wide winter hazard | TomTom + NWS + Open-Meteo |
+| `#B3261E` Closed | A reported road closure, drawn along the closed stretch | TomTom incident `iconCategory` 8 |
+| `#D4890F` Use caution | A reported hazard on that stretch (accident, ice, flooding, dangerous conditions, road works, lane closure, fog, wind, jam, broken-down vehicle), **or** an area-wide winter road alert, **or** freezing precipitation in the forecast | TomTom; NWS alerts (winter storm, winter weather, ice storm, blizzard, freezing rain/drizzle/fog, snow squall, lake-effect/heavy snow, sleet); Open-Meteo (Elevated weather attention) |
+| `#6F8CAD` No reported problems (quiet slate) | Incident data loaded and nothing reported on this road, and no area-wide winter hazard | TomTom + NWS + Open-Meteo |
 | Gray: No condition data | Incident data not configured or unavailable, and no area caution | — |
 
 - NWS **Freeze Warnings, Frost Advisories, Wind Chill and cold alerts are excluded** from area caution. They concern crops and people, not roads, and flagging every road for them would be misleading.
 - **TomTom request:** `GET https://api.tomtom.com/traffic/services/5/incidentDetails?key=…&bbox=<±0.1°>&fields={incidents{…}}&timeValidityFilter=present&language=en-US`, made from `/api/incidents` only, so the key never reaches the browser. It's cached for 3 minutes per ~1 km cell; the free tier allows about 2,500 requests a day. Without a key the route answers `{ configured: false }`, and the banner says closures are not connected.
 - **Parsing** (`app/lib/traffic-incidents.ts`): validates geometry (Point or LineString), maps `iconCategory` to closed or caution, and drops unknown categories. It keeps description, from/to, road numbers and start/end times, and deduplicates by id.
-- **Not yet verified against a live TomTom response:** no key was available during development. The parser is built from the documented v5 format and covered by fixture tests.
+- **Verified live** (2026-11-07): with a key, London showed about 150 closures and 56 hazards drawn on the affected stretches.
 - **Attribution:** "Traffic data © TomTom".
+
+## 11. Google Gemini treatment approach
+
+- **Endpoint:** `POST https://generativelanguage.googleapis.com/v1beta/interactions?alt=sse` (Interactions API), from `/api/advice` only. Header `x-goog-api-key`; default model `gemini-3.5-flash-lite` (`GEMINI_MODEL` overrides it).
+- **Input:** only RoadSalt's own data for the selected road: name and class, reported condition and incidents, nearby features and the 100 m exposure stretches, the weather summary, NWS observation, alerts and winter storm reports (`app/lib/advice.ts`).
+- **Grounding:** the `google_search` tool is requested for current local news. If the project has no grounding quota (HTTP 429), the route retries once without it, and the answer says local news wasn't checked.
+- **Output:** streamed to the browser as NDJSON; parsed defensively for text, `url_citation` sources and `search_suggestions`, which are shown with grounded answers as Google's terms require.
+- **Rules:** no numeric application rates (system instruction plus `redactRates`), never "icy" or "safe", labelled AI-generated and for review.
+- **Caching:** one answer per road, place and hour (Regenerate bypasses it).
+
+## 12. Response cache (SQLite)
+
+- `app/lib/cache-db.ts`: `PersistentCache`, an in-memory layer in front of Node's built-in `node:sqlite`, stored at `.data/roadsalt.db` (gitignored). Successful results only, one namespace per route.
+- TTLs: weather 10 min, observations 5 min, NWS points 24 h, incidents 3 min, storm reports 10 min, plow status 2 min, geocoding 1 h, Gemini 1 h.
+- `GET /api/cache` lists entries, size and hits per namespace in development only (404 in production builds).
 
 ## Not connected
 
